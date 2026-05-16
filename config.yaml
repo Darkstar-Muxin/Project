@@ -1,0 +1,75 @@
+horizons:
+  - 5
+  - 10
+  - 15
+  - 30
+  - 60
+
+participation_limit: 0.30
+
+raw_data_dir: data
+processed_data_dir: data/processed
+feature_data_dir: data/features
+model_dir: data/models
+output_dir: data/outputs
+
+exclude_dirs:
+  - raw_data
+  - data/processed
+  - data/features
+  - data/models
+  - data/outputs
+
+stock_code_candidates:
+  - stock_code
+  - securityid
+  - symbol
+  - code
+
+datetime_candidates:
+  - datetime
+  - date_time
+  - tradingtime
+  - time
+
+date_candidates:
+  - tradingdate
+  - trade_date
+  - date
+
+price_candidates:
+  - price
+  - last_price
+  - close
+  - trade_price
+
+volume_candidates:
+  - volume
+  - trade_volume
+  - tradevolume
+
+amount_candidates:
+  - amount
+  - turnover
+  - total_turnover
+
+batch_size: 1000000
+train_batch_size: 100000
+train_sample_per_group: 50000
+train_min_batches_before_stop: 30
+train_max_batches: 120
+evaluation_batch_size: 100000
+evaluation_sample_per_group: 50000
+evaluation_min_batches_before_stop: 20
+evaluation_max_batches: 120
+random_state: 42
+model_max_iter: 120
+model_learning_rate: 0.06
+model_l2_regularization: 0.01
+train_months:
+  - 202602
+  - 202603
+test_months:
+  - 202604
+backtest_order_qty: 100000
+worst_case_top_n: 100

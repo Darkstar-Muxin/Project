@@ -1,2 +1,11 @@
 .ipynb_checkpoints/
 *.parquet
+__pycache__/
+*.pyc
+raw_data/
+data/processed/
+data/features/
+data/models/
+data/models_smoke/
+data/models_optimized_smoke/
+data/outputs/

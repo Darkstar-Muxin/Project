@@ -73,3 +73,12 @@ test_months:
   - 202604
 backtest_order_qty: 100000
 worst_case_top_n: 100
+rolling_windows:
+  - 5
+  - 8
+rolling_test_months:
+  - 202604
+rolling_model_dir: data/models/rolling
+rolling_output_dir: data/outputs/rolling
+rolling_batch_size: 300000
+rolling_keep_intermediate: false

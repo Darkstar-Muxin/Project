@@ -208,6 +208,31 @@ python scripts/04_evaluate.py --config config.yaml
 streamlit run app/streamlit_app.py
 ```
 
+## Rolling 全量训练实验
+
+在静态模型之外，可以运行 5 日 / 8 日滚动窗口实验。这个流程不抽样训练：对每个 4 月预测日，只使用该日前最近 5 个或 8 个交易日的全量历史样本，按流动性组、horizon、目标逐个训练模型，训练完立即保存并释放内存。
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml
+```
+
+输出目录：
+
+```text
+data/outputs/rolling/
+```
+
+主要结果文件：
+
+```text
+rolling_evaluation_metrics.csv
+rolling_window_comparison.csv
+rolling_recommendation_backtest_summary.csv
+rolling_recommendation_backtest_worst_cases.csv
+```
+
+网页 Demo 的“评估报告”页会自动读取 rolling 结果，展示静态模型之外的 5 日 / 8 日窗口对比。
+
 运行：
 
 ```bash

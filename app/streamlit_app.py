@@ -145,6 +145,8 @@ def _render_report_tab() -> None:
     by_minute = _read_csv_if_exists("data/outputs/prediction_error_by_minute.csv")
     rec_summary = _read_csv_if_exists("data/outputs/recommendation_backtest_summary.csv")
     worst_cases = _read_csv_if_exists("data/outputs/recommendation_backtest_worst_cases.csv")
+    rolling_compare = _read_csv_if_exists("data/outputs/rolling/rolling_window_comparison.csv")
+    rolling_metrics = _read_csv_if_exists("data/outputs/rolling/rolling_evaluation_metrics.csv")
 
     if metrics is None or by_date is None or by_stock is None or by_minute is None:
         st.warning("尚未找到完整评估报告文件。请先运行：python scripts/04_evaluate.py --config config.yaml")
@@ -236,6 +238,31 @@ def _render_report_tab() -> None:
     if worst_cases is not None:
         st.markdown("**偏离真实最优最大的样本**")
         st.dataframe(worst_cases.head(50), width="stretch")
+
+    st.subheader("Rolling 全量窗口对比")
+    if rolling_compare is None:
+        st.info("尚未找到 rolling 报告。运行 python scripts/06_rolling_backtest.py --config config.yaml 后，这里会显示 5日/8日窗口对比。")
+        return
+    st.dataframe(rolling_compare, width="stretch")
+    fig_roll = px.bar(
+        rolling_compare,
+        x="window",
+        y=["vwap_mae", "baseline_vwap_mae"],
+        barmode="group",
+        title="Rolling VWAP MAE vs Baseline",
+    )
+    st.plotly_chart(fig_roll)
+    if rolling_metrics is not None:
+        fig_roll_h = px.line(
+            rolling_metrics,
+            x="horizon",
+            y="vwap_mae",
+            color="liquidity_group",
+            facet_col="window",
+            markers=True,
+            title="Rolling 不同 horizon 的 VWAP MAE",
+        )
+        st.plotly_chart(fig_roll_h)
 
 
 st.set_page_config(page_title="A股最优交易完成时间推荐", layout="wide")

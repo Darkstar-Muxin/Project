@@ -56,16 +56,7 @@ participation = order_qty / predicted_market_volume
 
 ### `scripts/00_check_schema.py`
 
-作用：检查 `data/` 下 parquet 文件的字段结构和字段映射。
-
-它会：
-
-- 递归扫描 `data/` 下的 parquet 文件。
-- 排除 `raw_data/`、`data/processed/`、`data/features/`、`data/models/`、`data/outputs/`。
-- 自动识别股票代码、时间、价格、成交量、成交额字段。
-- 输出 schema 检查结果到 JSON。
-
-输出：
+检查 `data/` 下 parquet 文件的字段结构和字段映射，输出：
 
 ```text
 data/outputs/schema_summary.json
@@ -79,20 +70,7 @@ python scripts/00_check_schema.py --data_dir data --config config.yaml --out dat
 
 ### `scripts/01_preprocess.py`
 
-作用：把原始成交数据处理成分钟级行情数据，并生成股票流动性分组。
-
-它会：
-
-- 读取 `data/202602.parquet`、`data/202603.parquet`、`data/202604.parquet`。
-- 不读取 `raw_data/`。
-- 自动识别并统一字段名：
-  - `stock_code`
-  - `datetime`
-  - `price`
-  - `volume`
-  - `amount`
-- 按 `stock_code + minute` 聚合为分钟级 OHLC、成交量、成交额、VWAP。
-- 按平均日成交额把股票分成 `high`、`medium`、`low` 三类。
+把原始成交数据处理成分钟级行情数据，并生成股票流动性分组。
 
 输出：
 
@@ -109,18 +87,7 @@ python scripts/01_preprocess.py --config config.yaml
 
 ### `scripts/02_build_features_labels.py`
 
-作用：构造模型训练数据，包括特征和未来标签。
-
-它会：
-
-- 读取 `data/processed/minute_data.parquet`。
-- 读取 `data/processed/stock_liquidity_group.parquet`。
-- 构造行情特征、时间特征、历史 rolling 特征、同时间段历史特征。
-- 对每个候选区间 `[5, 10, 15, 30, 60]` 构造：
-  - `future_volume_h`
-  - `future_vwap_h`
-
-注意：未来标签窗口采用 `[t, t+h)`，即从当前分钟开始到未来 `h` 分钟内。
+构造模型训练数据，包括行情特征、历史 rolling 特征、同分钟历史特征，以及未来 VWAP / 成交量标签。
 
 输出：
 
@@ -136,17 +103,19 @@ python scripts/02_build_features_labels.py --config config.yaml
 
 ### `scripts/03_train_models.py`
 
-作用：训练分组、分 horizon 的预测模型。
+训练静态模型。默认使用 `202602`、`202603` 作为样本内训练月份，`202604` 留作样本外测试。
 
-它会：
+当前 VWAP 模型预测的是：
 
-- 读取 `data/features/model_dataset.parquet`。
-- 只使用 `config.yaml` 中 `train_months` 指定的样本内月份，默认是 `202602`、`202603`。
-- 对每个流动性分组 `high / medium / low` 单独训练模型。
-- 对每个候选区间单独训练两个模型：
-  - VWAP 模型：预测 `future_vwap_h`
-  - Volume 模型：预测 `log1p(future_volume_h)`
-- 模型使用 `HistGradientBoostingRegressor`。
+```text
+future_vwap_h / current_vwap - 1
+```
+
+成交量模型预测的是：
+
+```text
+log1p(future_volume_h)
+```
 
 输出：
 
@@ -164,33 +133,19 @@ python scripts/03_train_models.py --config config.yaml
 
 ### `scripts/04_evaluate.py`
 
-作用：用样本外月份评估已训练模型的预测误差和推荐效果。
-
-它会：
-
-- 读取训练好的模型。
-- 只使用 `config.yaml` 中 `test_months` 指定的样本外月份，默认是 `202604`。
-- 在特征数据上计算：
-  - `vwap_mae`
-  - `vwap_rmse`
-  - `volume_mae`
-  - `volume_rmse`
-- 用 `backtest_order_qty` 模拟订单，比较模型推荐区间和历史真实最优可行区间。
+评估静态模型，输出样本内 / 样本外预测准确性、baseline 对比、推荐回测结果和 worst cases。
 
 输出：
 
 ```text
 data/outputs/evaluation_metrics.csv
-data/outputs/recommendation_backtest_detail.csv
+data/outputs/prediction_error_detail.csv
+data/outputs/prediction_error_by_date.csv
+data/outputs/prediction_error_by_stock.csv
+data/outputs/prediction_error_by_minute.csv
 data/outputs/recommendation_backtest_summary.csv
 data/outputs/recommendation_backtest_worst_cases.csv
 ```
-
-其中：
-
-- `recommendation_backtest_detail.csv`：逐笔样本外推荐对比，包含模型推荐区间、预测 VWAP、预测成交量、预测成交占比、推荐区间的真实 VWAP、真实成交量、真实成交占比、真实最优区间和 regret。
-- `recommendation_backtest_summary.csv`：按流动性组和买卖方向汇总，包括真实可行率、推荐区间实际可行率、最优区间命中率、平均 regret、最大 regret。
-- `recommendation_backtest_worst_cases.csv`：按偏离真实最优的绝对 regret 排序，列出最差的样本，用于定位模型推荐失败案例。
 
 运行：
 
@@ -200,38 +155,7 @@ python scripts/04_evaluate.py --config config.yaml
 
 ### `scripts/05_run_demo.py`
 
-作用：启动 Streamlit 网页 Demo。
-
-它等价于运行：
-
-```bash
-streamlit run app/streamlit_app.py
-```
-
-## Rolling 全量训练实验
-
-在静态模型之外，可以运行 5 日 / 8 日滚动窗口实验。这个流程不抽样训练：对每个 4 月预测日，只使用该日前最近 5 个或 8 个交易日的全量历史样本，按流动性组、horizon、目标逐个训练模型，训练完立即保存并释放内存。
-
-```bash
-python scripts/06_rolling_backtest.py --config config.yaml
-```
-
-输出目录：
-
-```text
-data/outputs/rolling/
-```
-
-主要结果文件：
-
-```text
-rolling_evaluation_metrics.csv
-rolling_window_comparison.csv
-rolling_recommendation_backtest_summary.csv
-rolling_recommendation_backtest_worst_cases.csv
-```
-
-网页 Demo 的“评估报告”页会自动读取 rolling 结果，展示静态模型之外的 5 日 / 8 日窗口对比。
+启动 Streamlit 网页 Demo。
 
 运行：
 
@@ -239,15 +163,47 @@ rolling_recommendation_backtest_worst_cases.csv
 python scripts/05_run_demo.py
 ```
 
-网页 Demo 只要求已经跑完 `03_train_models.py`，不强制要求跑 `04_evaluate.py`。如果输入的是历史样本中存在未来标签的时间点，页面会自动展示预测结果和真实未来 VWAP、真实成交量、真实成交占比、真实最优区间、是否命中真实最优和 regret。这个单笔真实对比直接来自 `data/features/model_dataset.parquet`，不依赖批量评估输出。
-
-如果提示 `No module named streamlit`，说明当前 Python 环境还没安装 Streamlit，需要先运行：
+等价于：
 
 ```bash
-pip install -r requirements.txt
+streamlit run app/streamlit_app.py
+```
+
+网页 Demo 只要求已经跑完 `03_train_models.py`，不强制要求跑 `04_evaluate.py`。如果已经跑过 `04` 或 `06`，网页“评估报告”页会自动读取相应报告。
+
+### `scripts/06_rolling_backtest.py`
+
+运行 rolling 全量训练实验。
+
+该流程不抽样训练。对每个 4 月预测日，分别使用该日前最近 5 个交易日、最近 8 个交易日的全量历史样本训练模型，然后预测该日。
+
+输出：
+
+```text
+data/models/rolling/
+data/outputs/rolling/
+```
+
+主要结果：
+
+```text
+data/outputs/rolling/rolling_evaluation_metrics.csv
+data/outputs/rolling/rolling_window_comparison.csv
+data/outputs/rolling/rolling_recommendation_backtest_summary.csv
+data/outputs/rolling/rolling_recommendation_backtest_worst_cases.csv
+```
+
+运行：
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml
 ```
 
 ## 完整执行流程
+
+### 1. 基础静态模型流程
+
+第一次完整运行：
 
 ```bash
 pip install -r requirements.txt
@@ -265,7 +221,32 @@ python scripts/04_evaluate.py --config config.yaml
 streamlit run app/streamlit_app.py
 ```
 
+如果只是重新打开网页：
+
+```bash
+streamlit run app/streamlit_app.py
+```
+
+### 2. Rolling 全量训练流程
+
+在基础流程完成 `02_build_features_labels.py` 之后，可以运行 rolling 实验：
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml
+```
+
+如果想在网页评估报告中看到 rolling 对比，推荐运行：
+
+```bash
+python scripts/04_evaluate.py --config config.yaml
+python scripts/06_rolling_backtest.py --config config.yaml
+streamlit run app/streamlit_app.py
+```
+
+注意：`06_rolling_backtest.py` 会训练很多模型，耗时明显长于 `03_train_models.py`。
+
 ## 训练和预测阶段区别
 
 - 训练阶段：可以使用历史真实未来数据构造 `future_vwap_h` 和 `future_volume_h` 标签。
 - 预测阶段：不能使用未来真实数据，只能使用模型预测的 VWAP 和成交量判断 30% 约束。
+- 网页里的真实对比只用于历史样本复盘，不参与真实预测决策。

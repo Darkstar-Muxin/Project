@@ -74,7 +74,7 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 模型候选特征包括：
 
 - 行情特征：价格、VWAP、成交量、成交额、成交笔数、买卖成交不平衡、1/5/10 分钟收益率、5/10/20 分钟滚动成交量、滚动成交额、滚动 VWAP、滚动波动率、VWAP 偏离。
-- 历史统计特征：过去 5/10/20 日股票日均量、日均额、日均 VWAP；同股票同分钟历史均值；历史同分钟 volume ratio 均值。
+- 历史统计特征：过去 5/10/20 日股票日均量、日均额、日均 VWAP；同股票同分钟历史均值；历史同分钟 volume ratio 均值；历史同分钟累计成交进度均值。
 - 时间特征：分钟序号、距开盘分钟数、距收盘分钟数、上午/下午标记、绝对时间 sin/cos。
 - IVE 特征：分钟成交量、累计成交量、成交额、累计成交额、股票 embedding、流动性组 embedding、位置编码、绝对时间编码。
 - 交易要素：买卖方向、交易数量、交易数量相对预测成交量/历史成交量的占比主要在推理和推荐阶段使用。
@@ -101,6 +101,7 @@ log_future_volume_ratio_{h}
 - 不使用全样本流动性分类；rolling 分类只用预测日前窗口数据。
 - 不默认生成或读取全量 `minute_data.parquet` / `model_dataset.parquet`。
 - 模型输入排除当天全天才知道的字段：`daily_volume, daily_amount, volume_ratio, accumulated_volume_ratio, amount_ratio, accumulated_amount_ratio`。
+- 但保留历史日的 ratio/profile 信息，例如 `same_minute_volume_ratio_mean_*d` 和 `same_minute_accumulated_volume_ratio_mean_*d`。
 - 历史同分钟、历史日均等特征使用 `shift(1)`，当前日特征只引用历史日。
 - feature part 不生成全局流动性组历史特征；rolling 阶段才注入窗口分类。
 - future labels 只用于训练和历史评估，不作为预测输入。

@@ -95,6 +95,9 @@ def _add_same_minute_features(df: pd.DataFrame) -> pd.DataFrame:
         minute_amount=("amount", "sum"),
         minute_vwap=("vwap", "mean"),
         minute_volume_ratio=("volume_ratio", "sum"),
+        minute_accumulated_volume_ratio=("accumulated_volume_ratio", "max"),
+        minute_amount_ratio=("amount_ratio", "sum"),
+        minute_accumulated_amount_ratio=("accumulated_amount_ratio", "max"),
     )
     minute_stats = minute_stats.sort_values(["stock_code", "minute", "date"])
     for window in [5, 10, 20]:
@@ -103,6 +106,9 @@ def _add_same_minute_features(df: pd.DataFrame) -> pd.DataFrame:
             ("minute_amount", f"same_minute_amount_mean_{window}d"),
             ("minute_vwap", f"same_minute_vwap_mean_{window}d"),
             ("minute_volume_ratio", f"same_minute_volume_ratio_mean_{window}d"),
+            ("minute_accumulated_volume_ratio", f"same_minute_accumulated_volume_ratio_mean_{window}d"),
+            ("minute_amount_ratio", f"same_minute_amount_ratio_mean_{window}d"),
+            ("minute_accumulated_amount_ratio", f"same_minute_accumulated_amount_ratio_mean_{window}d"),
         ]:
             minute_stats[dst] = minute_stats.groupby(["stock_code", "minute"])[src].transform(
                 lambda s: s.shift(1).rolling(window, min_periods=1).mean()

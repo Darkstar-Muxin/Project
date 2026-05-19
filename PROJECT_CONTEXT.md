@@ -160,6 +160,9 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 - `same_minute_amount_mean_5d/10d/20d`
 - `same_minute_vwap_mean_5d/10d/20d`
 - `same_minute_volume_ratio_mean_5d/10d/20d`
+- `same_minute_accumulated_volume_ratio_mean_5d/10d/20d`
+- `same_minute_amount_ratio_mean_5d/10d/20d`
+- `same_minute_accumulated_amount_ratio_mean_5d/10d/20d`
 
 时间特征：
 
@@ -213,6 +216,7 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
   - `accumulated_volume_ratio`
   - `amount_ratio`
   - `accumulated_amount_ratio`
+- 历史日的 ratio/profile 特征可以使用，例如同分钟历史 volume ratio、同分钟历史累计成交进度、同分钟历史 amount ratio。
 - 成交量预测从 volume ratio 反推成交量时，使用训练窗口历史日均量先验，不使用预测日真实全天成交量。
 - 默认不合并全量大表，rolling 按窗口日期读取所需日文件。
 

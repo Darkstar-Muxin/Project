@@ -8,10 +8,17 @@ horizons:
 participation_limit: 0.30
 
 raw_data_dir: data
+tick_data_dir: data/tick_data
 processed_data_dir: data/processed
+minute_parts_dir: data/processed/minute_parts
+feature_parts_dir: data/features/model_parts
 feature_data_dir: data/features
 model_dir: data/models
 output_dir: data/outputs
+preprocess_overwrite: false
+build_combined_minute_data: false
+build_combined_feature_data: false
+feature_overwrite: true
 
 exclude_dirs:
   - raw_data
@@ -21,39 +28,58 @@ exclude_dirs:
   - data/outputs
 
 stock_code_candidates:
+  - StockCode
+  - stockcode
   - stock_code
   - securityid
   - symbol
   - code
 
 datetime_candidates:
+  - Time
   - datetime
   - date_time
   - tradingtime
   - time
 
 date_candidates:
+  - Date
   - tradingdate
   - trade_date
   - date
 
 price_candidates:
+  - Price
   - price
   - last_price
   - close
   - trade_price
 
 volume_candidates:
+  - Volume
   - volume
   - trade_volume
   - tradevolume
 
 amount_candidates:
+  - Turnover
   - amount
   - turnover
   - total_turnover
 
 batch_size: 1000000
+context_length: 390
+volume_ratio_scale: 10000
+ive_d_model: 64
+ive_nhead: 4
+ive_num_layers: 2
+ive_dropout: 0.1
+ive_epochs: 5
+ive_batch_size: 256
+ive_learning_rate: 0.0003
+ive_weight_decay: 0.0001
+ive_max_train_rows:
+ive_device: auto
 train_batch_size: 100000
 train_sample_per_group: 50000
 train_min_batches_before_stop: 30
@@ -76,9 +102,14 @@ worst_case_top_n: 100
 rolling_windows:
   - 5
   - 8
+rolling_train_months:
+  - 202602
+  - 202603
 rolling_test_months:
   - 202604
 rolling_model_dir: data/models/rolling
 rolling_output_dir: data/outputs/rolling
 rolling_batch_size: 300000
 rolling_keep_intermediate: false
+rolling_liquidity_high_quantile: 0.70
+rolling_liquidity_low_quantile: 0.30

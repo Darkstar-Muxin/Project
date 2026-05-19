@@ -18,7 +18,10 @@ def main() -> None:
 
     config = load_config(args.config)
     dataset = build_features(config)
-    print(f"feature dataset rows: {len(dataset):,}")
+    if dataset.empty:
+        print("feature dataset rows: saved as daily feature parts")
+    else:
+        print(f"feature dataset rows: {len(dataset):,}")
 
 
 if __name__ == "__main__":

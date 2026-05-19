@@ -8,3 +8,4 @@ plotly
 matplotlib
 tqdm
 pyyaml
+torch

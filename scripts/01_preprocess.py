@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.config import load_config
 from src.preprocess import preprocess_raw_data
-from src.stock_classification import classify_stocks
+from src.stock_classification import classify_stocks, classify_stocks_from_minute_parts
 
 
 def main() -> None:
@@ -19,8 +19,12 @@ def main() -> None:
 
     config = load_config(args.config)
     minute_df = preprocess_raw_data(config)
-    group_df = classify_stocks(minute_df, config)
-    print(f"minute rows: {len(minute_df):,}")
+    if minute_df.empty:
+        group_df = classify_stocks_from_minute_parts(config)
+        print("minute rows: saved as daily minute parts")
+    else:
+        group_df = classify_stocks(minute_df, config)
+        print(f"minute rows: {len(minute_df):,}")
     print(f"stock groups: {len(group_df):,}")
 
 

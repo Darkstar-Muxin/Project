@@ -34,7 +34,7 @@ def _add_market_features(df: pd.DataFrame) -> pd.DataFrame:
     df["return_1m"] = grouped["close"].pct_change()
     df["return_5m"] = grouped["close"].pct_change(5)
     df["return_10m"] = grouped["close"].pct_change(10)
-    for window in [5, 10, 20]:
+    for window in [5, 10]:
         df[f"volume_{window}m_sum"] = grouped["volume"].rolling(window, min_periods=1).sum().reset_index(level=0, drop=True)
         df[f"amount_{window}m_sum"] = grouped["amount"].rolling(window, min_periods=1).sum().reset_index(level=0, drop=True)
         df[f"vwap_{window}m"] = safe_divide(df[f"amount_{window}m_sum"], df[f"volume_{window}m_sum"])
@@ -70,7 +70,7 @@ def _daily_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
     daily["daily_total_vwap"] = safe_divide(daily["daily_total_amount"], daily["daily_total_volume"])
     daily = daily.sort_values(["stock_code", "date"])
-    for window in [5, 10, 20]:
+    for window in [5, 10]:
         for src, dst in [
             ("daily_total_volume", f"stock_rolling_volume_mean_{window}d"),
             ("daily_total_amount", f"stock_rolling_amount_mean_{window}d"),
@@ -100,7 +100,7 @@ def _add_same_minute_features(df: pd.DataFrame) -> pd.DataFrame:
         minute_accumulated_amount_ratio=("accumulated_amount_ratio", "max"),
     )
     minute_stats = minute_stats.sort_values(["stock_code", "minute", "date"])
-    for window in [5, 10, 20]:
+    for window in [5, 10]:
         for src, dst in [
             ("minute_volume", f"same_minute_volume_mean_{window}d"),
             ("minute_amount", f"same_minute_amount_mean_{window}d"),
@@ -128,7 +128,7 @@ def _add_group_minute_features(df: pd.DataFrame) -> pd.DataFrame:
         group_minute_volume_ratio=("volume_ratio", "mean"),
     )
     stats = stats.sort_values(["liquidity_group", "minute", "date"])
-    for window in [5, 10, 20]:
+    for window in [5, 10]:
         for src, dst in [
             ("group_minute_volume", f"group_same_minute_volume_mean_{window}d"),
             ("group_minute_amount", f"group_same_minute_amount_mean_{window}d"),

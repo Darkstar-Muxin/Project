@@ -74,7 +74,7 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 模型候选特征包括：
 
 - 行情特征：价格、VWAP、成交量、成交额、成交笔数、买卖成交不平衡、1/5/10 分钟收益率、5/10/20 分钟滚动成交量、滚动成交额、滚动 VWAP、滚动波动率、VWAP 偏离。
-- 历史统计特征：过去 5/10/20 日股票日均量、日均额、日均 VWAP；同股票同分钟历史均值；历史同分钟 volume ratio 均值；历史同分钟累计成交进度均值。
+- 历史统计特征：过去 5/10 日股票日均量、日均额、日均 VWAP；同股票同分钟历史均值；历史同分钟 volume ratio 均值；历史同分钟累计成交进度均值。
 - 时间特征：分钟序号、距开盘分钟数、距收盘分钟数、上午/下午标记、绝对时间 sin/cos。
 - IVE 特征：分钟成交量、累计成交量、成交额、累计成交额、股票 embedding、流动性组 embedding、位置编码、绝对时间编码。
 - 交易要素：买卖方向、交易数量、交易数量相对预测成交量/历史成交量的占比主要在推理和推荐阶段使用。
@@ -165,7 +165,7 @@ python scripts/02_build_features_labels.py --config config.yaml
 python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2
 ```
 
-并行版使用 Python 标准库 `multiprocessing.Pool`，以“交易日”为任务并发生成 `data/features/model_parts/YYYYMMDD.parquet`。每个 worker 会读取当前日和最多前 20 个历史日，worker 数不要开太大；机器内存紧张时建议 `--workers 1` 或 `--workers 2`。默认跳过已存在的 feature part；如需重算，添加 `--overwrite`。
+并行版使用 Python 标准库 `multiprocessing.Pool`，以“交易日”为任务并发生成 `data/features/model_parts/YYYYMMDD.parquet`。每个 worker 会读取当前日和最多前 10 个历史日，worker 数不要开太大；机器内存紧张时建议 `--workers 1` 或 `--workers 2`。默认跳过已存在的 feature part；如需重算，添加 `--overwrite`。
 
 也可以按月份分批计算：
 

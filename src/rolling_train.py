@@ -194,7 +194,7 @@ def _predict_frame(test_df: pd.DataFrame, group_path: Path, config: dict[str, An
     horizons = [int(h) for h in meta["horizons"]]
     daily_prior = rows["stock_code"].astype(str).map(meta.get("daily_volume_prior", {}))
     daily_prior = daily_prior.fillna(rows["liquidity_group"].astype(str).map(meta.get("group_daily_volume_prior", {})))
-    for col in ["stock_rolling_volume_mean_20d", "stock_rolling_volume_mean_10d", "stock_rolling_volume_mean_5d", "volume"]:
+    for col in ["stock_rolling_volume_mean_10d", "stock_rolling_volume_mean_5d", "volume"]:
         if daily_prior.isna().any() and col in rows.columns:
             daily_prior = daily_prior.fillna(rows[col])
     daily_prior = daily_prior.astype(float).clip(lower=0)

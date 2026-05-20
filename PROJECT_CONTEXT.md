@@ -153,16 +153,16 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 - `vwap_5m, vwap_10m, vwap_20m`
 - `volatility_5m, volatility_10m, volatility_20m`
 - `vwap_deviation_5m, vwap_deviation_10m, vwap_deviation_20m`
-- `stock_rolling_volume_mean_5d/10d/20d`
-- `stock_rolling_amount_mean_5d/10d/20d`
-- `stock_rolling_vwap_mean_5d/10d/20d`
-- `same_minute_volume_mean_5d/10d/20d`
-- `same_minute_amount_mean_5d/10d/20d`
-- `same_minute_vwap_mean_5d/10d/20d`
-- `same_minute_volume_ratio_mean_5d/10d/20d`
-- `same_minute_accumulated_volume_ratio_mean_5d/10d/20d`
-- `same_minute_amount_ratio_mean_5d/10d/20d`
-- `same_minute_accumulated_amount_ratio_mean_5d/10d/20d`
+- `stock_rolling_volume_mean_5d/10d`
+- `stock_rolling_amount_mean_5d/10d`
+- `stock_rolling_vwap_mean_5d/10d`
+- `same_minute_volume_mean_5d/10d`
+- `same_minute_amount_mean_5d/10d`
+- `same_minute_vwap_mean_5d/10d`
+- `same_minute_volume_ratio_mean_5d/10d`
+- `same_minute_accumulated_volume_ratio_mean_5d/10d`
+- `same_minute_amount_ratio_mean_5d/10d`
+- `same_minute_accumulated_amount_ratio_mean_5d/10d`
 
 时间特征：
 
@@ -247,7 +247,7 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 `src/feature_engineering.py`
 
 - 按日生成 feature part。
-- 每天读取当前日和最多 20 个历史日来计算历史特征。
+- 每天读取当前日和最多 10 个历史日来计算历史特征。
 - 不注入全局流动性组。
 - 不生成 group-level 历史特征，避免依赖全样本分类。
 
@@ -308,7 +308,7 @@ python scripts/06_rolling_backtest.py --config config.yaml
 streamlit run app/streamlit_app.py
 ```
 
-`02_build_features_labels_parallel.py` 是可选加速版，不替代原 `02_build_features_labels.py`。它使用 Python 标准库 `multiprocessing.Pool`，按交易日并行生成 `data/features/model_parts/YYYYMMDD.parquet`，默认跳过已存在文件；如需重算加 `--overwrite`。每个 worker 会读取当前日和最多 20 个历史日，内存紧张时不要把 `--workers` 开太大。
+`02_build_features_labels_parallel.py` 是可选加速版，不替代原 `02_build_features_labels.py`。它使用 Python 标准库 `multiprocessing.Pool`，按交易日并行生成 `data/features/model_parts/YYYYMMDD.parquet`，默认跳过已存在文件；如需重算加 `--overwrite`。每个 worker 会读取当前日和最多 10 个历史日，内存紧张时不要把 `--workers` 开太大。
 
 并行版支持按月份分批运行：
 

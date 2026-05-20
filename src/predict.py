@@ -129,7 +129,7 @@ def _daily_volume_prior(row: pd.Series, meta: dict[str, Any]) -> float:
     group_prior = meta.get("group_daily_volume_prior", {}).get(str(row["liquidity_group"]))
     if group_prior and float(group_prior) > 0:
         return float(group_prior)
-    for col in ["stock_rolling_volume_mean_20d", "stock_rolling_volume_mean_10d", "stock_rolling_volume_mean_5d"]:
+    for col in ["stock_rolling_volume_mean_10d", "stock_rolling_volume_mean_5d"]:
         value = row.get(col)
         if pd.notna(value) and float(value) > 0:
             return float(value)

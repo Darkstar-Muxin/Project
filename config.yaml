@@ -19,6 +19,7 @@ preprocess_overwrite: false
 build_combined_minute_data: false
 build_combined_feature_data: false
 feature_overwrite: true
+feature_history_days: 10
 
 exclude_dirs:
   - raw_data

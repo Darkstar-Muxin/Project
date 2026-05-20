@@ -167,6 +167,12 @@ python scripts/02_build_features_labels_parallel.py --config config.yaml --worke
 
 并行版使用 Python 标准库 `multiprocessing.Pool`，以“交易日”为任务并发生成 `data/features/model_parts/YYYYMMDD.parquet`。每个 worker 会读取当前日和最多前 10 个历史日，worker 数不要开太大；机器内存紧张时建议 `--workers 1` 或 `--workers 2`。默认跳过已存在的 feature part；如需重算，添加 `--overwrite`。
 
+并行版默认使用 `--maxtasks-per-child 1`，每个 worker 处理完一个交易日后会退出重建，用来把 pandas/numpy 的峰值内存还给操作系统。如果内存仍然上升，先降低 worker 数：
+
+```bash
+python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202603
+```
+
 也可以按月份分批计算：
 
 ```bash

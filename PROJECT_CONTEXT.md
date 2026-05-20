@@ -310,6 +310,8 @@ streamlit run app/streamlit_app.py
 
 `02_build_features_labels_parallel.py` 是可选加速版，不替代原 `02_build_features_labels.py`。它使用 Python 标准库 `multiprocessing.Pool`，按交易日并行生成 `data/features/model_parts/YYYYMMDD.parquet`，默认跳过已存在文件；如需重算加 `--overwrite`。每个 worker 会读取当前日和最多 10 个历史日，内存紧张时不要把 `--workers` 开太大。
 
+并行版默认 `--maxtasks-per-child 1`，每个 worker 完成一个交易日后退出重建，避免 pandas/numpy 在长生命周期进程里持续持有峰值内存。大数据机器上建议 `--workers 2` 起步，不建议直接开 6。
+
 并行版支持按月份分批运行：
 
 ```bash

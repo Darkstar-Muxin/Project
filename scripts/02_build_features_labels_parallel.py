@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import sys
 import multiprocessing as mp
@@ -26,9 +27,17 @@ def _build_one(args: tuple[str, list[str], str, dict[str, Any], bool]) -> tuple[
         return current_path.name, -1, "cached"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    day_df = _build_one_day_features(current_path, history_paths, config)
-    day_df.to_parquet(out_path, index=False)
-    return current_path.name, len(day_df), "built"
+    try:
+        day_df = _build_one_day_features(current_path, history_paths, config)
+        row_count = len(day_df)
+        day_df.to_parquet(out_path, index=False)
+        return current_path.name, row_count, "built"
+    finally:
+        try:
+            del day_df
+        except UnboundLocalError:
+            pass
+        gc.collect()
 
 
 def _make_tasks(
@@ -79,16 +88,23 @@ def main() -> None:
         nargs="+",
         help="Optional YYYYMM filters, for example: --months 202602 202603. History days before those months are still used when available.",
     )
+    parser.add_argument(
+        "--maxtasks-per-child",
+        type=int,
+        default=1,
+        help="Restart each worker after this many day tasks to release pandas/numpy memory back to the OS. Default is 1.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
     months = {str(month) for month in args.months} if args.months else None
     tasks = _make_tasks(config, overwrite=bool(args.overwrite), months=months)
     workers = max(1, int(args.workers))
+    maxtasks = max(1, int(args.maxtasks_per_child))
     month_text = "all configured months" if months is None else ",".join(sorted(months))
     print(
         f"building {len(tasks)} feature parts for months={month_text} "
-        f"with workers={workers}, overwrite={bool(args.overwrite)}",
+        f"with workers={workers}, overwrite={bool(args.overwrite)}, maxtasks_per_child={maxtasks}",
         flush=True,
     )
 
@@ -96,7 +112,7 @@ def main() -> None:
     cached = 0
     total_rows = 0
     ctx = mp.get_context("spawn")
-    with ctx.Pool(processes=workers) as pool:
+    with ctx.Pool(processes=workers, maxtasksperchild=maxtasks) as pool:
         for name, rows, status in tqdm(
             pool.imap_unordered(_build_one, tasks),
             total=len(tasks),

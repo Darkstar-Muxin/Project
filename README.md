@@ -159,6 +159,14 @@ python scripts/01_preprocess.py --config config.yaml
 python scripts/02_build_features_labels.py --config config.yaml
 ```
 
+并行构建每日特征和标签（可选，不替代原脚本）：
+
+```bash
+python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2
+```
+
+并行版使用 Python 标准库 `multiprocessing.Pool`，以“交易日”为任务并发生成 `data/features/model_parts/YYYYMMDD.parquet`。每个 worker 会读取当前日和最多前 20 个历史日，worker 数不要开太大；机器内存紧张时建议 `--workers 1` 或 `--workers 2`。默认跳过已存在的 feature part；如需重算，添加 `--overwrite`。
+
 运行 rolling 训练和回测，这是主流程：
 
 ```bash
@@ -183,6 +191,7 @@ streamlit run app/streamlit_app.py
 - `src/preprocess.py`：逐日、分 batch 读取 tick；聚合为分钟 OHLCV/VWAP；保存每日分钟缓存。
 - `src/stock_classification.py`：生成 baseline 流动性分类；rolling 主流程不依赖全样本分类。
 - `src/feature_engineering.py`：按日构建行情、历史统计、时间、IVE 特征和 future labels；默认输出每日 feature part。
+- `scripts/02_build_features_labels_parallel.py`：使用 `multiprocessing.Pool` 按交易日多进程构建 feature parts，适合在内存允许时加速 `02`。
 - `src/label_builder.py`：同股票、同交易日内构造未来 VWAP、成交量和 volume ratio 标签。
 - `src/ive_dataset.py`：构造 390 分钟上下文序列，做标准化、padding mask、股票 ID、流动性组 ID；排除泄露字段。
 - `src/ive_model.py`：IVE 风格 Transformer 模型。

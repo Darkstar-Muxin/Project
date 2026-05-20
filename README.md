@@ -173,6 +173,8 @@ python scripts/02_build_features_labels_parallel.py --config config.yaml --worke
 python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202603
 ```
 
+计算优化说明：feature builder 会读取当前日和最多前 10 个历史日来计算历史滞后特征，但 future labels 只对当前目标日计算；同分钟历史统计直接基于分钟缓存行生成，避免重复大范围聚合。
+
 也可以按月份分批计算：
 
 ```bash

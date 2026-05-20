@@ -13,6 +13,26 @@ from src.label_builder import build_future_labels
 from src.utils import resolve_path, safe_divide
 
 
+MINUTE_READ_COLUMNS = [
+    "stock_code",
+    "datetime",
+    "date",
+    "minute",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "vwap",
+    "trade_count",
+    "buy_volume",
+    "sell_volume",
+    "buy_amount",
+    "sell_amount",
+]
+
+
 def _log_step(message: str) -> float:
     print(f"[feature] {message}", flush=True)
     return perf_counter()
@@ -90,14 +110,29 @@ def _add_historical_daily_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _add_same_minute_features(df: pd.DataFrame) -> pd.DataFrame:
-    minute_stats = df.groupby(["stock_code", "date", "minute"], as_index=False).agg(
-        minute_volume=("volume", "sum"),
-        minute_amount=("amount", "sum"),
-        minute_vwap=("vwap", "mean"),
-        minute_volume_ratio=("volume_ratio", "sum"),
-        minute_accumulated_volume_ratio=("accumulated_volume_ratio", "max"),
-        minute_amount_ratio=("amount_ratio", "sum"),
-        minute_accumulated_amount_ratio=("accumulated_amount_ratio", "max"),
+    minute_stats = df[
+        [
+            "stock_code",
+            "date",
+            "minute",
+            "volume",
+            "amount",
+            "vwap",
+            "volume_ratio",
+            "accumulated_volume_ratio",
+            "amount_ratio",
+            "accumulated_amount_ratio",
+        ]
+    ].rename(
+        columns={
+            "volume": "minute_volume",
+            "amount": "minute_amount",
+            "vwap": "minute_vwap",
+            "volume_ratio": "minute_volume_ratio",
+            "accumulated_volume_ratio": "minute_accumulated_volume_ratio",
+            "amount_ratio": "minute_amount_ratio",
+            "accumulated_amount_ratio": "minute_accumulated_amount_ratio",
+        }
     )
     minute_stats = minute_stats.sort_values(["stock_code", "minute", "date"])
     for window in [5, 10]:
@@ -174,7 +209,7 @@ def _build_one_day_features(
     config: dict[str, Any],
 ) -> pd.DataFrame:
     paths = [*history_paths, current_path]
-    frames = [pd.read_parquet(path) for path in paths]
+    frames = [pd.read_parquet(path, columns=MINUTE_READ_COLUMNS) for path in paths]
     minute_df = pd.concat(frames, ignore_index=True)
     minute_df["datetime"] = pd.to_datetime(minute_df["datetime"])
     current_date = pd.to_datetime(current_path.stem[:8], format="%Y%m%d").date().isoformat()
@@ -187,13 +222,14 @@ def _build_one_day_features(
         _add_static_code_features,
     ]:
         df = func(df)
+    df = df[df["date"].astype(str).eq(str(current_date))].sort_values(["stock_code", "datetime"]).reset_index(drop=True)
     df = build_future_labels(
         df,
         config["horizons"],
         config.get("participation_limit", 0.30),
         float(config.get("volume_ratio_scale", 10000.0)),
     )
-    return df[df["date"].astype(str).eq(str(current_date))].sort_values(["stock_code", "datetime"]).reset_index(drop=True)
+    return df.sort_values(["stock_code", "datetime"]).reset_index(drop=True)
 
 
 def build_feature_parts(config: dict[str, Any]) -> list[Path]:

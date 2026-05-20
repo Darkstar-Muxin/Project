@@ -312,6 +312,8 @@ streamlit run app/streamlit_app.py
 
 并行版默认 `--maxtasks-per-child 1`，每个 worker 完成一个交易日后退出重建，避免 pandas/numpy 在长生命周期进程里持续持有峰值内存。大数据机器上建议 `--workers 2` 起步，不建议直接开 6。
 
+feature builder 的性能优化口径：历史特征使用当前日和最多前 10 个历史日；future labels 只对当前目标日计算，不对历史窗口重复计算；同分钟历史统计直接基于分钟缓存行重命名和 rolling，避免重复 groupby 聚合。
+
 并行版支持按月份分批运行：
 
 ```bash

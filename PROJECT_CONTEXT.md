@@ -310,6 +310,14 @@ streamlit run app/streamlit_app.py
 
 `02_build_features_labels_parallel.py` 是可选加速版，不替代原 `02_build_features_labels.py`。它使用 Python 标准库 `multiprocessing.Pool`，按交易日并行生成 `data/features/model_parts/YYYYMMDD.parquet`，默认跳过已存在文件；如需重算加 `--overwrite`。每个 worker 会读取当前日和最多 20 个历史日，内存紧张时不要把 `--workers` 开太大。
 
+并行版支持按月份分批运行：
+
+```bash
+python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202602
+```
+
+`--months` 只限制输出目标日期，历史滞后特征仍会使用目标日期之前的 minute parts。
+
 静态 baseline 可选：
 
 ```bash

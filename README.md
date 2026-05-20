@@ -167,6 +167,16 @@ python scripts/02_build_features_labels_parallel.py --config config.yaml --worke
 
 并行版使用 Python 标准库 `multiprocessing.Pool`，以“交易日”为任务并发生成 `data/features/model_parts/YYYYMMDD.parquet`。每个 worker 会读取当前日和最多前 20 个历史日，worker 数不要开太大；机器内存紧张时建议 `--workers 1` 或 `--workers 2`。默认跳过已存在的 feature part；如需重算，添加 `--overwrite`。
 
+也可以按月份分批计算：
+
+```bash
+python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202602
+python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202603
+python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202604
+```
+
+`--months` 只限制“要输出哪些日期”的 feature parts；计算历史滞后特征时，仍会使用目标日期之前已经存在的分钟缓存作为历史窗口。
+
 运行 rolling 训练和回测，这是主流程：
 
 ```bash

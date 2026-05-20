@@ -31,7 +31,11 @@ def _build_one(args: tuple[str, list[str], str, dict[str, Any], bool]) -> tuple[
     return current_path.name, len(day_df), "built"
 
 
-def _make_tasks(config: dict[str, Any], overwrite: bool) -> list[tuple[str, list[str], str, dict[str, Any], bool]]:
+def _make_tasks(
+    config: dict[str, Any],
+    overwrite: bool,
+    months: set[str] | None = None,
+) -> list[tuple[str, list[str], str, dict[str, Any], bool]]:
     part_paths = _minute_part_paths(config)
     if not part_paths:
         raise FileNotFoundError("No minute part files found. Run scripts/01_preprocess.py first.")
@@ -40,6 +44,8 @@ def _make_tasks(config: dict[str, Any], overwrite: bool) -> list[tuple[str, list
     max_history_days = int(config.get("feature_history_days", 20))
     tasks: list[tuple[str, list[str], str, dict[str, Any], bool]] = []
     for idx, current_path in enumerate(part_paths):
+        if months is not None and current_path.stem[:6] not in months:
+            continue
         history_paths = part_paths[max(0, idx - max_history_days) : idx]
         out_path = feature_parts_dir / current_path.name
         tasks.append(
@@ -68,12 +74,23 @@ def main() -> None:
         action="store_true",
         help="Overwrite existing data/features/model_parts/YYYYMMDD.parquet files.",
     )
+    parser.add_argument(
+        "--months",
+        nargs="+",
+        help="Optional YYYYMM filters, for example: --months 202602 202603. History days before those months are still used when available.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
-    tasks = _make_tasks(config, overwrite=bool(args.overwrite))
+    months = {str(month) for month in args.months} if args.months else None
+    tasks = _make_tasks(config, overwrite=bool(args.overwrite), months=months)
     workers = max(1, int(args.workers))
-    print(f"building {len(tasks)} feature parts with workers={workers}, overwrite={bool(args.overwrite)}", flush=True)
+    month_text = "all configured months" if months is None else ",".join(sorted(months))
+    print(
+        f"building {len(tasks)} feature parts for months={month_text} "
+        f"with workers={workers}, overwrite={bool(args.overwrite)}",
+        flush=True,
+    )
 
     built = 0
     cached = 0

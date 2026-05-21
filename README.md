@@ -165,6 +165,12 @@ python scripts/06_rolling_backtest.py --config config.yaml --windows 5
 python scripts/06_rolling_backtest.py --config config.yaml --windows 5 8
 ```
 
+只跑指定目标月份时使用 `--months`。它只限制预测/回测目标日期，训练窗口仍然从目标日前的历史交易日中取最近 N 天：
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml --months 202604 --windows 5
+```
+
 默认先训练所有 rolling 任务，再用 CPU 预测评估并汇总报告。默认不覆盖已有模型；如需重训：
 
 ```bash
@@ -187,6 +193,12 @@ CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --windows 5 --train-workers 2 --predict-workers 4
+```
+
+多 GPU 且只跑 202604 的 window=5：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --train-workers 2 --predict-workers 4
 ```
 
 并行训练版按 `date + window` 分发任务到可见 GPU。每个任务内部仍按 `high / medium / low` 顺序训练，避免同一日期内部抢显存。也可以显式指定卡：

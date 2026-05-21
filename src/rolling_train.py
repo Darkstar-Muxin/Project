@@ -78,12 +78,19 @@ def _rolling_eval_dates(all_dates: list[str], config: dict[str, Any]) -> list[tu
     return [("train", date) for date in train_dates] + [("test", date) for date in test_dates]
 
 
-def build_rolling_tasks(config: dict[str, Any], windows: list[int] | None = None) -> tuple[list[dict[str, Any]], Path, list[str]]:
+def build_rolling_tasks(
+    config: dict[str, Any],
+    windows: list[int] | None = None,
+    months: list[int | str] | None = None,
+) -> tuple[list[dict[str, Any]], Path, list[str]]:
     feature_parts = _feature_part_paths(config)
     dataset_path = _feature_part_dir(config) if feature_parts else resolve_path(config["feature_data_dir"]) / "model_dataset.parquet"
     batch_size = int(config.get("rolling_batch_size", 300_000))
     all_dates = get_trading_dates(dataset_path, batch_size=batch_size)
     eval_dates = _rolling_eval_dates(all_dates, config)
+    if months:
+        month_set = {str(month) for month in months}
+        eval_dates = [(split, date) for split, date in eval_dates if date.replace("-", "")[:6] in month_set]
     windows = [int(w) for w in (windows if windows is not None else config.get("rolling_windows", [5, 8]))]
     tasks: list[dict[str, Any]] = []
     for split, test_date in eval_dates:
@@ -626,13 +633,14 @@ def run_rolling_backtest(
     overwrite_models: bool | None = None,
     predict_workers: int | None = None,
     windows: list[int] | None = None,
+    months: list[int | str] | None = None,
 ) -> None:
     ensure_dirs(config)
     model_root = resolve_path(config.get("rolling_model_dir", "data/models/rolling"))
     output_root = resolve_path(config.get("rolling_output_dir", "data/outputs/rolling"))
     model_root.mkdir(parents=True, exist_ok=True)
     output_root.mkdir(parents=True, exist_ok=True)
-    tasks, dataset_path, _ = build_rolling_tasks(config, windows=windows)
+    tasks, dataset_path, _ = build_rolling_tasks(config, windows=windows, months=months)
     all_columns = _schema_columns(dataset_path)
     print(f"[rolling] train phase tasks={len(tasks)}", flush=True)
     completed_tasks: list[dict[str, Any]] = []

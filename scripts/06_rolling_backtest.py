@@ -17,10 +17,17 @@ def main() -> None:
     parser.add_argument("--overwrite-models", action="store_true", help="retrain rolling models even if artifacts already exist")
     parser.add_argument("--predict-workers", type=int, default=None, help="CPU worker count for prediction/evaluation")
     parser.add_argument("--windows", type=int, nargs="+", default=None, help="rolling windows to run, e.g. --windows 5 or --windows 5 8")
+    parser.add_argument("--months", nargs="+", default=None, help="target months to run, e.g. --months 202604")
     args = parser.parse_args()
 
     config = load_config(args.config)
-    run_rolling_backtest(config, overwrite_models=args.overwrite_models or None, predict_workers=args.predict_workers, windows=args.windows)
+    run_rolling_backtest(
+        config,
+        overwrite_models=args.overwrite_models or None,
+        predict_workers=args.predict_workers,
+        windows=args.windows,
+        months=args.months,
+    )
     print("rolling backtest completed")
 
 

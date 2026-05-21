@@ -227,6 +227,12 @@ python scripts/06_rolling_backtest.py --config config.yaml --windows 5
 python scripts/06_rolling_backtest_parallel.py --config config.yaml --windows 5 --train-workers 2 --predict-workers 4
 ```
 
+只跑指定目标月份时使用 `--months`，例如 `--months 202604`。这个参数只过滤预测/回测目标日期，训练窗口仍然从目标日前已有交易日中取最近 N 天，不改变防泄露口径。
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --train-workers 2 --predict-workers 4
+```
+
 多 GPU 训练入口：
 
 ```bash
@@ -325,7 +331,7 @@ streamlit run app/streamlit_app.py
 多 GPU 训练时：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --windows 5 --train-workers 2 --predict-workers 4
+CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --train-workers 2 --predict-workers 4
 ```
 
 ## 12. 当前限制

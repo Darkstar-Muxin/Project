@@ -53,12 +53,13 @@ def main() -> None:
     parser.add_argument("--devices", default=None, help="comma-separated GPU ids; defaults to CUDA_VISIBLE_DEVICES")
     parser.add_argument("--overwrite-models", action="store_true", help="retrain rolling models even if artifacts already exist")
     parser.add_argument("--windows", type=int, nargs="+", default=None, help="rolling windows to run, e.g. --windows 5 or --windows 5 8")
+    parser.add_argument("--months", nargs="+", default=None, help="target months to run, e.g. --months 202604")
     args = parser.parse_args()
 
     config = load_config(args.config)
     from src.rolling_train import _schema_columns, build_rolling_tasks, run_rolling_predictions
 
-    tasks, dataset_path, _ = build_rolling_tasks(config, windows=args.windows)
+    tasks, dataset_path, _ = build_rolling_tasks(config, windows=args.windows, months=args.months)
     all_columns = _schema_columns(dataset_path)
     train_workers = int(args.train_workers or config.get("rolling_train_workers", 1))
     train_workers = max(train_workers, 1)

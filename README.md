@@ -158,6 +158,13 @@ python scripts/02_build_features_labels_parallel.py --config config.yaml --worke
 python scripts/06_rolling_backtest.py --config config.yaml
 ```
 
+只跑指定 rolling window 时使用 `--windows`，不会改动 `config.yaml`：
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml --windows 5
+python scripts/06_rolling_backtest.py --config config.yaml --windows 5 8
+```
+
 默认先训练所有 rolling 任务，再用 CPU 预测评估并汇总报告。默认不覆盖已有模型；如需重训：
 
 ```bash
@@ -174,6 +181,12 @@ python scripts/06_rolling_backtest.py --config config.yaml --predict-workers 4
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --train-workers 2 --predict-workers 4
+```
+
+多 GPU 且只跑 window=5：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --windows 5 --train-workers 2 --predict-workers 4
 ```
 
 并行训练版按 `date + window` 分发任务到可见 GPU。每个任务内部仍按 `high / medium / low` 顺序训练，避免同一日期内部抢显存。也可以显式指定卡：

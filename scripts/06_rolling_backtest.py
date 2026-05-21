@@ -16,10 +16,11 @@ def main() -> None:
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--overwrite-models", action="store_true", help="retrain rolling models even if artifacts already exist")
     parser.add_argument("--predict-workers", type=int, default=None, help="CPU worker count for prediction/evaluation")
+    parser.add_argument("--windows", type=int, nargs="+", default=None, help="rolling windows to run, e.g. --windows 5 or --windows 5 8")
     args = parser.parse_args()
 
     config = load_config(args.config)
-    run_rolling_backtest(config, overwrite_models=args.overwrite_models or None, predict_workers=args.predict_workers)
+    run_rolling_backtest(config, overwrite_models=args.overwrite_models or None, predict_workers=args.predict_workers, windows=args.windows)
     print("rolling backtest completed")
 
 

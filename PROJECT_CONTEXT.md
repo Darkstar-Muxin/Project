@@ -220,6 +220,13 @@ CPU 预测并行：
 python scripts/06_rolling_backtest.py --config config.yaml --predict-workers 4
 ```
 
+只跑指定 rolling window 时使用 `--windows`，例如：
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml --windows 5
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --windows 5 --train-workers 2 --predict-workers 4
+```
+
 多 GPU 训练入口：
 
 ```bash
@@ -318,7 +325,7 @@ streamlit run app/streamlit_app.py
 多 GPU 训练时：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --train-workers 2 --predict-workers 4
+CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --windows 5 --train-workers 2 --predict-workers 4
 ```
 
 ## 12. 当前限制

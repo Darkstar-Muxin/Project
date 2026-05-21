@@ -233,6 +233,12 @@ python scripts/06_rolling_backtest_parallel.py --config config.yaml --windows 5 
 python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --train-workers 2 --predict-workers 4
 ```
 
+只训练模型、暂不做预测评估时使用 `--train-only`：
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --train-workers 2 --train-only
+```
+
 多 GPU 训练入口：
 
 ```bash

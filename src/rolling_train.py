@@ -634,6 +634,7 @@ def run_rolling_backtest(
     predict_workers: int | None = None,
     windows: list[int] | None = None,
     months: list[int | str] | None = None,
+    train_only: bool = False,
 ) -> None:
     ensure_dirs(config)
     model_root = resolve_path(config.get("rolling_model_dir", "data/models/rolling"))
@@ -648,6 +649,9 @@ def run_rolling_backtest(
         result = train_rolling_task(config, task, dataset_path, all_columns, overwrite_models=overwrite_models)
         if result.get("status") in {"trained", "empty_train"}:
             completed_tasks.append(task)
+    if train_only:
+        print(f"[rolling] train-only completed tasks={len(completed_tasks)}", flush=True)
+        return
     print(f"[rolling] predict phase tasks={len(completed_tasks)}", flush=True)
     run_rolling_predictions(config, completed_tasks, dataset_path, all_columns, predict_workers=predict_workers)
     tmp_root = output_root / "_tmp"

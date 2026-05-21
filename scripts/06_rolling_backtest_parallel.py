@@ -54,6 +54,7 @@ def main() -> None:
     parser.add_argument("--overwrite-models", action="store_true", help="retrain rolling models even if artifacts already exist")
     parser.add_argument("--windows", type=int, nargs="+", default=None, help="rolling windows to run, e.g. --windows 5 or --windows 5 8")
     parser.add_argument("--months", nargs="+", default=None, help="target months to run, e.g. --months 202604")
+    parser.add_argument("--train-only", action="store_true", help="train rolling models and skip prediction/evaluation")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -85,6 +86,9 @@ def main() -> None:
             for _ in pool.imap_unordered(_train_worker, payloads):
                 pass
 
+    if args.train_only:
+        print("[parallel-train] train-only completed; skip prediction/evaluation", flush=True)
+        return
     print(f"[parallel-train] training completed; start prediction/evaluation", flush=True)
     run_rolling_predictions(config, tasks, dataset_path, all_columns, predict_workers=args.predict_workers)
     print("parallel rolling backtest completed")

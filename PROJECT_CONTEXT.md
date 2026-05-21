@@ -1,10 +1,8 @@
-# Project Context: A股最优交易完成时间推荐系统
+# Project Context: A 股最优交易完成时间推荐系统
 
 本文档用于让新的 Codex 对话快速理解当前项目状态。后续凡是修改数据口径、特征、模型、评估、网页或运行方式，都必须同步更新 `README.md` 和本文件。
 
 ## 1. 项目目标
-
-课题名称：A股分类建模的最优交易完成时间推荐系统。
 
 系统输入：
 
@@ -40,6 +38,7 @@
 - 预测 intraday volume ratio。
 - context length 为 390 个一分钟步，代表一整天分钟上下文。
 - 使用 Transformer 架构、时间编码、股票特征和概率式输出。
+- 训练、测试/评估、live trading forecast 是分开的；推理预测阶段不反向传播，不更新模型参数。
 
 本项目工程化适配：
 
@@ -80,53 +79,37 @@ data/features/model_parts/YYYYMMDD.parquet
 - `data/processed/minute_data.parquet`
 - `data/features/model_dataset.parquet`
 
-相关配置：
-
-```yaml
-build_combined_minute_data: false
-build_combined_feature_data: false
-feature_overwrite: true
-```
-
 这样做是为了避免一次性 concat 全部分钟数据导致内存爆掉。
 
-## 4. 样本期和 Rolling 口径
+## 4. Rolling 口径
 
 当前配置：
 
 ```yaml
-train_months: [202602, 202603]
-test_months: [202604]
 rolling_train_months: [202602, 202603]
 rolling_test_months: [202604]
 rolling_windows: [5, 8]
 ```
 
-主流程是 `scripts/06_rolling_backtest.py`：
+主流程：
 
 - 对每个样本内日期和样本外日期都执行 rolling。
 - 对每个预测日，只使用该日前最近 N 个交易日训练。
-- 训练后只预测该日。
-- `split=train` 用来调窗口和模型超参数。
-- `split=test` 用来做最终样本外评估。
+- 样本内 `split=train` 用于调窗口和模型超参数。
+- 样本外 `split=test` 用于最终评估。
+- 不使用未来日期的数据做训练、分类或标准化。
 
 ## 5. 流动性分类
 
-重要：流动性分类不能使用全样本。
+流动性分类不能使用全样本。
 
 当前 rolling 主流程在每个 `test_date + window` 上重新分类：
 
 1. 读取预测日前最近 N 个交易日的 feature parts。
-2. 对每只股票计算窗口内：
-   - 平均日成交额
-   - 平均日成交量
-   - 平均日成交笔数
-3. 按平均日成交额分位数划分：
-   - 高流动性 high
-   - 中流动性 medium
-   - 低流动性 low
-4. 将这个窗口分类应用于训练窗口和预测日。
-5. 保存：
+2. 对每只股票计算窗口内平均日成交额、平均日成交量、平均日成交笔数。
+3. 主要按平均日成交额分位数划分 `high / medium / low`。
+4. 将窗口分类应用于训练窗口和预测日。
+5. 保存到：
 
 ```text
 data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
@@ -161,8 +144,6 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 - `same_minute_vwap_mean_5d/10d`
 - `same_minute_volume_ratio_mean_5d/10d`
 - `same_minute_accumulated_volume_ratio_mean_5d/10d`
-- `same_minute_amount_ratio_mean_5d/10d`
-- `same_minute_accumulated_amount_ratio_mean_5d/10d`
 
 时间特征：
 
@@ -178,14 +159,7 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 - `is_sh`
 - `is_sz`
 
-交易要素特征：
-
-- 方向、数量、数量/预测成交量、数量/历史成交量主要在推理和推荐阶段使用。
-
-当前无盘口字段：
-
-- tick 数据没有 bid/ask/order book。
-- 不伪造盘口特征。
+当前 tick 数据没有 bid/ask/order book，因此盘口特征只作为预留能力，不伪造。
 
 ## 7. 标签
 
@@ -209,27 +183,68 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 - 不再使用全样本流动性分类做 rolling 训练。
 - 特征日文件不再生成全局流动性组历史特征。
 - rolling 训练会丢弃旧特征文件里可能存在的 `liquidity_group` 和 `group_same_minute_*` 列。
-- 模型输入排除当天全天才知道的字段：
-  - `daily_volume`
-  - `daily_amount`
-  - `volume_ratio`
-  - `accumulated_volume_ratio`
-  - `amount_ratio`
-  - `accumulated_amount_ratio`
+- 模型输入排除当天全天才知道的字段：`daily_volume, daily_amount, volume_ratio, accumulated_volume_ratio, amount_ratio, accumulated_amount_ratio`。
 - 历史日的 ratio/profile 特征可以使用，例如同分钟历史 volume ratio、同分钟历史累计成交进度、同分钟历史 amount ratio。
 - 成交量预测从 volume ratio 反推成交量时，使用训练窗口历史日均量先验，不使用预测日真实全天成交量。
 - 默认不合并全量大表，rolling 按窗口日期读取所需日文件。
 
 仍需注意：
 
-- 如果旧的 `data/features/model_parts/*.parquet` 是修复前生成的，需要重新运行 `scripts/02_build_features_labels.py`，因为配置中 `feature_overwrite: true` 会覆盖旧文件。
+- 如果旧的 `data/features/model_parts/*.parquet` 是修复前生成的，需要重新运行 `02`。
 - 如果将来新增盘口数据，必须保证盘口特征在预测时可见，不能使用未来订单簿状态。
 
-## 9. 核心文件职责
+## 9. 训练和预测流程
+
+`scripts/06_rolling_backtest.py` 是稳定串行入口，但内部已拆成两个阶段：
+
+1. 训练阶段：遍历所有 `split + test_date + window`，每个任务先完成 `high / medium / low` 三组模型训练。
+2. 预测评估阶段：按 `date + window + liquidity_group` 形成预测任务，可用 CPU 多进程并行，写分片后汇总总报告。
+
+预测阶段使用 `model.eval()` 和 `torch.no_grad()`，不会反向传播，也不会更新模型参数。训练阶段才会调用 `loss.backward()` 和 `optimizer.step()`。
+
+模型默认不覆盖：
+
+```yaml
+rolling_overwrite_models: false
+```
+
+如果 `ive_model.pt, model_meta.json, feature_columns.joblib, stock_vocab.joblib, group_vocab.joblib, normalizer.joblib` 都已存在，则跳过该日期/window/group 的训练。需要重训时使用：
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml --overwrite-models
+```
+
+CPU 预测并行：
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml --predict-workers 4
+```
+
+多 GPU 训练入口：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --train-workers 2 --predict-workers 4
+```
+
+并行训练按 `date + window` 分发任务到可见 GPU。每个任务内部仍按 `high / medium / low` 顺序训练，避免同一日期内部抢显存。也可以用 `--devices 0,1` 显式指定卡。
+
+预测分片目录：
+
+```text
+data/outputs/rolling/parts/window_{N}d/{test_date}/{liquidity_group}/
+```
+
+最终报告仍写入：
+
+```text
+data/outputs/rolling/
+```
+
+## 10. 核心文件职责
 
 `config.yaml`
 
-- 全局配置、样本月份、rolling windows、缓存目录、模型超参数、防合并开关。
+- 全局配置、样本月份、rolling windows、缓存目录、模型超参数、防合并开关、训练覆盖和 worker 数。
 
 `src/preprocess.py`
 
@@ -238,22 +253,12 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 - 保存每日分钟缓存。
 - 默认不 combine。
 
-`src/stock_classification.py`
-
-- baseline 股票分类。
-- `classify_stocks_from_minute_parts` 只用 `train_months`，避免 baseline 文件包含 4 月信息。
-- rolling 主流程另行做窗口分类。
-
 `src/feature_engineering.py`
 
 - 按日生成 feature part。
 - 每天读取当前日和最多 10 个历史日来计算历史特征。
 - 不注入全局流动性组。
 - 不生成 group-level 历史特征，避免依赖全样本分类。
-
-`src/label_builder.py`
-
-- 构造未来 VWAP、成交量、volume ratio 标签。
 
 `src/ive_dataset.py`
 
@@ -268,16 +273,23 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 
 `src/train.py`
 
-- 静态 baseline 训练，不是主流程。
+- 模型训练、损失函数、模型保存。
+- 训练时根据 `ive_device` 使用 CPU 或 CUDA。
 
 `src/rolling_train.py`
 
-- 主流程。
-- 读取窗口日期数据。
+- 主 rolling 逻辑。
+- 构造 rolling 任务。
+- 读取窗口数据。
 - 计算窗口流动性分类。
-- 按流动性组训练模型。
-- 预测当天。
-- 输出 rolling 评估和推荐回测。
+- 训练/预测分离。
+- CPU 多进程预测评估。
+- 汇总 rolling 评估和推荐回测。
+
+`scripts/06_rolling_backtest_parallel.py`
+
+- 多 GPU date/window 级训练调度。
+- 训练结束后调用 CPU 并行预测评估。
 
 `src/predict.py`
 
@@ -287,55 +299,36 @@ data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 - 加载对应流动性组模型。
 - 输出推荐区间和候选表。
 
-`src/evaluate.py`
-
-- 静态 baseline 评估。
-
 `app/streamlit_app.py`
 
 - 单笔推荐页面。
 - rolling 报告页面。
 
-## 10. 推荐运行顺序
+## 11. 推荐运行顺序
 
 ```bash
 pip install -r requirements.txt
 python scripts/00_check_schema.py --data_dir data/tick_data --config config.yaml --out data/outputs/schema_summary.json
 python scripts/01_preprocess.py --config config.yaml
-python scripts/02_build_features_labels.py --config config.yaml
 python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2
-python scripts/06_rolling_backtest.py --config config.yaml
+python scripts/06_rolling_backtest.py --config config.yaml --predict-workers 4
 streamlit run app/streamlit_app.py
 ```
 
-`02_build_features_labels_parallel.py` 是可选加速版，不替代原 `02_build_features_labels.py`。它使用 Python 标准库 `multiprocessing.Pool`，按交易日并行生成 `data/features/model_parts/YYYYMMDD.parquet`，默认跳过已存在文件；如需重算加 `--overwrite`。每个 worker 会读取当前日和最多 10 个历史日，内存紧张时不要把 `--workers` 开太大。
-
-并行版默认 `--maxtasks-per-child 1`，每个 worker 完成一个交易日后退出重建，避免 pandas/numpy 在长生命周期进程里持续持有峰值内存。大数据机器上建议 `--workers 2` 起步，不建议直接开 6。
-
-feature builder 的性能优化口径：历史特征使用当前日和最多前 10 个历史日；future labels 只对当前目标日计算，不对历史窗口重复计算；同分钟历史统计直接基于分钟缓存行重命名和 rolling，避免重复 groupby 聚合。
-
-并行版支持按月份分批运行：
+多 GPU 训练时：
 
 ```bash
-python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202602
+CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --train-workers 2 --predict-workers 4
 ```
 
-`--months` 只限制输出目标日期，历史滞后特征仍会使用目标日期之前的 minute parts。
+## 12. 当前限制
 
-静态 baseline 可选：
-
-```bash
-python scripts/03_train_models.py --config config.yaml
-python scripts/04_evaluate.py --config config.yaml
-```
-
-## 11. 当前限制
-
-- 当前环境如果未安装 PyTorch，模型训练和推理会失败，需要 `pip install torch`。
+- 当前环境如果未安装 PyTorch，模型训练和推理会失败，需要安装 torch。
 - rolling 训练会训练大量模型，耗时明显；这是为了避免抽样和未来信息泄露。
+- 多 GPU 并行会增加磁盘 IO 和内存压力，建议 `train-workers <= 可用 GPU 数`。
 - 网页单笔预测需要对应日期/window 的 rolling 模型已经生成。
 
-## 12. 维护约定
+## 13. 维护约定
 
 - 修改数据处理、特征、模型、rolling、评估、网页或运行命令时，必须同步更新 `README.md` 和本文件。
 - 任何使用全样本统计的新增逻辑都要先检查是否会泄露未来信息。

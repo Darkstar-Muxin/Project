@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 import json
+import multiprocessing as mp
 import shutil
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,17 @@ from src.ive_dataset import IVEDataset, Normalizer, get_ive_feature_columns
 from src.ive_model import IVEModel
 from src.train import train_ive_models
 from src.utils import resolve_path
+
+
+GROUPS = ["high", "medium", "low"]
+MODEL_ARTIFACTS = [
+    "ive_model.pt",
+    "model_meta.json",
+    "feature_columns.joblib",
+    "stock_vocab.joblib",
+    "group_vocab.joblib",
+    "normalizer.joblib",
+]
 
 
 def _feature_part_dir(config: dict[str, Any]) -> Path:
@@ -63,6 +76,31 @@ def _rolling_eval_dates(all_dates: list[str], config: dict[str, Any]) -> list[tu
     train_dates = _months_filter(all_dates, train_months)
     test_dates = _months_filter(all_dates, test_months)
     return [("train", date) for date in train_dates] + [("test", date) for date in test_dates]
+
+
+def build_rolling_tasks(config: dict[str, Any]) -> tuple[list[dict[str, Any]], Path, list[str]]:
+    feature_parts = _feature_part_paths(config)
+    dataset_path = _feature_part_dir(config) if feature_parts else resolve_path(config["feature_data_dir"]) / "model_dataset.parquet"
+    batch_size = int(config.get("rolling_batch_size", 300_000))
+    all_dates = get_trading_dates(dataset_path, batch_size=batch_size)
+    eval_dates = _rolling_eval_dates(all_dates, config)
+    windows = [int(w) for w in config.get("rolling_windows", [5, 8])]
+    tasks: list[dict[str, Any]] = []
+    for split, test_date in eval_dates:
+        prior_dates = [date for date in all_dates if date < test_date]
+        for window in windows:
+            train_dates = prior_dates[-window:]
+            if not train_dates:
+                continue
+            tasks.append(
+                {
+                    "split": split,
+                    "test_date": test_date,
+                    "window": window,
+                    "train_dates": train_dates,
+                }
+            )
+    return tasks, Path(dataset_path), all_dates
 
 
 def _load_filtered_rows(
@@ -142,6 +180,10 @@ def _apply_window_liquidity(df: pd.DataFrame, liquidity: pd.DataFrame) -> pd.Dat
     out = _drop_leaky_columns(df).merge(liquidity[["stock_code", "liquidity_group"]], on="stock_code", how="left")
     out["liquidity_group"] = out["liquidity_group"].fillna("low")
     return out
+
+
+def _model_artifacts_complete(group_path: Path) -> bool:
+    return all((group_path / name).exists() for name in MODEL_ARTIFACTS)
 
 
 def _load_model(group_path: Path) -> tuple[IVEModel, dict[str, Any]]:
@@ -354,79 +396,251 @@ def _write_reports(output_root: Path, metrics_rows: list[dict[str, Any]], detail
         ).to_csv(output_root / "rolling_window_comparison.csv", index=False, encoding="utf-8-sig")
 
 
-def run_rolling_backtest(config: dict[str, Any]) -> None:
+def _schema_columns(dataset_path: Path) -> list[str]:
+    if dataset_path.is_dir():
+        parts = sorted(path for path in dataset_path.glob("*.parquet") if path.stem[:8].isdigit())
+        if not parts:
+            return []
+        schema_source = parts[0]
+    else:
+        schema_source = dataset_path
+    return list(pq.ParquetFile(schema_source).schema_arrow.names)
+
+
+def _task_model_root(config: dict[str, Any], task: dict[str, Any]) -> Path:
+    model_root = resolve_path(config.get("rolling_model_dir", "data/models/rolling"))
+    return model_root / f"window_{int(task['window'])}d" / str(task["test_date"])
+
+
+def train_rolling_task(
+    config: dict[str, Any],
+    task: dict[str, Any],
+    dataset_path: str | Path | None = None,
+    all_columns: list[str] | None = None,
+    overwrite_models: bool | None = None,
+) -> dict[str, Any]:
+    dataset_path = Path(dataset_path) if dataset_path is not None else build_rolling_tasks(config)[1]
+    batch_size = int(config.get("rolling_batch_size", 300_000))
+    all_columns = all_columns or _schema_columns(dataset_path)
+    overwrite = bool(config.get("rolling_overwrite_models", False)) if overwrite_models is None else bool(overwrite_models)
+    group_model_root = _task_model_root(config, task)
+    train_dates = [str(date) for date in task["train_dates"]]
+    print(
+        f"[rolling-train] split={task['split']} test_date={task['test_date']} "
+        f"window={task['window']} train_dates={train_dates}",
+        flush=True,
+    )
+    train_window_df = _load_filtered_rows(dataset_path, set(train_dates), None, all_columns, batch_size)
+    if train_window_df.empty:
+        return {**task, "status": "empty_train"}
+    train_window_df = _drop_leaky_columns(train_window_df)
+    liquidity = _classify_window_liquidity(train_window_df, config)
+    group_model_root.mkdir(parents=True, exist_ok=True)
+    liquidity.to_parquet(group_model_root / "stock_liquidity_group.parquet", index=False)
+    train_window_df = _apply_window_liquidity(train_window_df, liquidity)
+    feature_columns = get_ive_feature_columns(train_window_df, [int(h) for h in config["horizons"]])
+
+    trained: list[str] = []
+    skipped: list[str] = []
+    empty: list[str] = []
+    for group_name in GROUPS:
+        group_path = group_model_root / group_name
+        train_df = train_window_df[train_window_df["liquidity_group"].astype(str).eq(group_name)].copy()
+        if train_df.empty:
+            empty.append(group_name)
+            continue
+        if not overwrite and _model_artifacts_complete(group_path):
+            print(f"[rolling-train] skip existing group={group_name} path={group_path}", flush=True)
+            skipped.append(group_name)
+            del train_df
+            gc.collect()
+            continue
+        print(f"[rolling-train] start group={group_name} rows={len(train_df):,}", flush=True)
+        train_ive_models(train_df, group_model_root, config, feature_columns=feature_columns)
+        print(f"[rolling-train] saved group={group_name} path={group_path}", flush=True)
+        trained.append(group_name)
+        del train_df
+        gc.collect()
+
+    del train_window_df
+    gc.collect()
+    return {**task, "status": "trained", "trained_groups": trained, "skipped_groups": skipped, "empty_groups": empty}
+
+
+def _part_dir(output_root: Path, task: dict[str, Any], group_name: str) -> Path:
+    return output_root / "parts" / f"window_{int(task['window'])}d" / str(task["test_date"]) / group_name
+
+
+def _write_prediction_part(
+    output_root: Path,
+    task: dict[str, Any],
+    group_name: str,
+    metrics_rows: list[dict[str, Any]],
+    detail_df: pd.DataFrame,
+    backtest_df: pd.DataFrame,
+) -> dict[str, str]:
+    part_dir = _part_dir(output_root, task, group_name)
+    part_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = part_dir / "metrics.csv"
+    detail_path = part_dir / "detail.parquet"
+    backtest_path = part_dir / "backtest.parquet"
+    for stale_path in [metrics_path, detail_path, backtest_path]:
+        if stale_path.exists():
+            stale_path.unlink()
+    if metrics_rows:
+        pd.DataFrame(metrics_rows).to_csv(metrics_path, index=False, encoding="utf-8-sig")
+    if not detail_df.empty:
+        detail_df.to_parquet(detail_path, index=False)
+    if not backtest_df.empty:
+        backtest_df.to_parquet(backtest_path, index=False)
+    return {
+        "metrics": str(metrics_path) if metrics_path.exists() else "",
+        "detail": str(detail_path) if detail_path.exists() else "",
+        "backtest": str(backtest_path) if backtest_path.exists() else "",
+    }
+
+
+def predict_rolling_group_task(payload: dict[str, Any]) -> dict[str, Any]:
+    config = payload["config"]
+    task = payload["task"]
+    group_name = str(payload["group_name"])
+    dataset_path = Path(payload["dataset_path"])
+    all_columns = payload["all_columns"]
+    batch_size = int(config.get("rolling_batch_size", 300_000))
+    output_root = resolve_path(config.get("rolling_output_dir", "data/outputs/rolling"))
+    group_model_root = _task_model_root(config, task)
+    group_path = group_model_root / group_name
+    if not _model_artifacts_complete(group_path):
+        return {**task, "group": group_name, "status": "missing_model"}
+    liquidity_path = group_model_root / "stock_liquidity_group.parquet"
+    if not liquidity_path.exists():
+        return {**task, "group": group_name, "status": "missing_liquidity"}
+    print(f"[rolling-predict] start split={task['split']} test_date={task['test_date']} window={task['window']} group={group_name}", flush=True)
+    liquidity = pd.read_parquet(liquidity_path)
+    test_window_df = _load_filtered_rows(dataset_path, {str(task["test_date"])}, None, all_columns, batch_size)
+    if test_window_df.empty:
+        return {**task, "group": group_name, "status": "empty_test"}
+    test_window_df = _apply_window_liquidity(test_window_df, liquidity)
+    test_df = test_window_df[test_window_df["liquidity_group"].astype(str).eq(group_name)].copy()
+    del test_window_df
+    if test_df.empty:
+        return {**task, "group": group_name, "status": "empty_group"}
+    pred_df, horizons = _predict_frame(test_df, group_path, config)
+    del test_df
+    if pred_df.empty:
+        return {**task, "group": group_name, "status": "empty_prediction"}
+    meta = {
+        "model_type": "ive_rolling",
+        "split": task["split"],
+        "window": int(task["window"]),
+        "test_date": task["test_date"],
+        "liquidity_group": group_name,
+        "train_start_date": task["train_dates"][0],
+        "train_end_date": task["train_dates"][-1],
+        "train_day_count": len(task["train_dates"]),
+    }
+    group_metrics, group_detail, group_backtest = _evaluate_predictions(pred_df, horizons, config, meta)
+    paths = _write_prediction_part(output_root, task, group_name, group_metrics, group_detail, group_backtest)
+    print(f"[rolling-predict] done split={task['split']} test_date={task['test_date']} window={task['window']} group={group_name}", flush=True)
+    del pred_df, group_detail, group_backtest
+    gc.collect()
+    return {**task, "group": group_name, "status": "predicted", "paths": paths}
+
+
+def _prediction_payloads(
+    config: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    dataset_path: Path,
+    all_columns: list[str],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "config": config,
+            "task": task,
+            "group_name": group_name,
+            "dataset_path": str(dataset_path),
+            "all_columns": all_columns,
+        }
+        for task in tasks
+        for group_name in GROUPS
+    ]
+
+
+def _collect_part_reports(part_results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[pd.DataFrame], list[pd.DataFrame]]:
+    metrics_rows: list[dict[str, Any]] = []
+    detail_dfs: list[pd.DataFrame] = []
+    backtest_dfs: list[pd.DataFrame] = []
+    for result in part_results:
+        if result.get("status") != "predicted":
+            continue
+        paths = result.get("paths", {})
+        metrics_raw = paths.get("metrics", "")
+        metrics_path = Path(metrics_raw) if metrics_raw else None
+        detail_raw = paths.get("detail", "")
+        backtest_raw = paths.get("backtest", "")
+        detail_path = Path(detail_raw) if detail_raw else None
+        backtest_path = Path(backtest_raw) if backtest_raw else None
+        if metrics_path is not None and metrics_path.exists():
+            metrics = pd.read_csv(metrics_path)
+            if not metrics.empty:
+                metrics_rows.extend(metrics.to_dict("records"))
+        if detail_path is not None and detail_path.exists():
+            detail = pd.read_parquet(detail_path)
+            if not detail.empty:
+                detail_dfs.append(detail)
+        if backtest_path is not None and backtest_path.exists():
+            backtest = pd.read_parquet(backtest_path)
+            if not backtest.empty:
+                backtest_dfs.append(backtest)
+    return metrics_rows, detail_dfs, backtest_dfs
+
+
+def run_rolling_predictions(
+    config: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    dataset_path: str | Path,
+    all_columns: list[str],
+    predict_workers: int | None = None,
+) -> list[dict[str, Any]]:
+    output_root = resolve_path(config.get("rolling_output_dir", "data/outputs/rolling"))
+    output_root.mkdir(parents=True, exist_ok=True)
+    workers = int(predict_workers if predict_workers is not None else config.get("rolling_predict_workers", 1))
+    workers = max(workers, 1)
+    payloads = _prediction_payloads(config, tasks, Path(dataset_path), all_columns)
+    if not payloads:
+        return []
+    print(f"[rolling-predict] tasks={len(payloads)} workers={workers}", flush=True)
+    if workers == 1:
+        results = [predict_rolling_group_task(payload) for payload in payloads]
+    else:
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(processes=workers, maxtasksperchild=1) as pool:
+            results = list(pool.imap_unordered(predict_rolling_group_task, payloads))
+    metrics_rows, detail_dfs, backtest_dfs = _collect_part_reports(results)
+    _write_reports(output_root, metrics_rows, detail_dfs, backtest_dfs)
+    return results
+
+
+def run_rolling_backtest(
+    config: dict[str, Any],
+    overwrite_models: bool | None = None,
+    predict_workers: int | None = None,
+) -> None:
     ensure_dirs(config)
-    feature_parts = _feature_part_paths(config)
-    dataset_path = _feature_part_dir(config) if feature_parts else resolve_path(config["feature_data_dir"]) / "model_dataset.parquet"
     model_root = resolve_path(config.get("rolling_model_dir", "data/models/rolling"))
     output_root = resolve_path(config.get("rolling_output_dir", "data/outputs/rolling"))
     model_root.mkdir(parents=True, exist_ok=True)
     output_root.mkdir(parents=True, exist_ok=True)
-    batch_size = int(config.get("rolling_batch_size", 300_000))
-    all_dates = get_trading_dates(dataset_path, batch_size=batch_size)
-    eval_dates = _rolling_eval_dates(all_dates, config)
-    windows = [int(w) for w in config.get("rolling_windows", [5, 8])]
-    schema_source = feature_parts[0] if feature_parts else dataset_path
-    schema = pq.ParquetFile(schema_source).schema_arrow
-    all_columns = list(schema.names)
-    feature_columns: list[str] | None = None
-    groups = ["high", "medium", "low"]
-    metrics_rows: list[dict[str, Any]] = []
-    detail_dfs: list[pd.DataFrame] = []
-    backtest_dfs: list[pd.DataFrame] = []
-
-    for split, test_date in eval_dates:
-        prior_dates = [date for date in all_dates if date < test_date]
-        for window in windows:
-            train_dates = prior_dates[-window:]
-            if not train_dates:
-                continue
-            print(f"[rolling] split={split} test_date={test_date} window={window} train_dates={train_dates}", flush=True)
-            group_model_root = model_root / f"window_{window}d" / test_date
-            train_window_df = _load_filtered_rows(dataset_path, set(train_dates), None, all_columns, batch_size)
-            if train_window_df.empty:
-                continue
-            train_window_df = _drop_leaky_columns(train_window_df)
-            liquidity = _classify_window_liquidity(train_window_df, config)
-            group_model_root.mkdir(parents=True, exist_ok=True)
-            liquidity.to_parquet(group_model_root / "stock_liquidity_group.parquet", index=False)
-            train_window_df = _apply_window_liquidity(train_window_df, liquidity)
-            test_window_df = _load_filtered_rows(dataset_path, {test_date}, None, all_columns, batch_size)
-            if test_window_df.empty:
-                continue
-            test_window_df = _apply_window_liquidity(test_window_df, liquidity)
-            if feature_columns is None:
-                feature_columns = get_ive_feature_columns(train_window_df, [int(h) for h in config["horizons"]])
-            for group_name in groups:
-                train_df = train_window_df[train_window_df["liquidity_group"].astype(str).eq(group_name)].copy()
-                if train_df.empty:
-                    continue
-                train_ive_models(train_df, group_model_root, config, feature_columns=feature_columns)
-                test_df = test_window_df[test_window_df["liquidity_group"].astype(str).eq(group_name)].copy()
-                if test_df.empty:
-                    continue
-                group_path = group_model_root / group_name
-                pred_df, horizons = _predict_frame(test_df, group_path, config)
-                if pred_df.empty:
-                    continue
-                meta = {
-                    "model_type": "ive_rolling",
-                    "split": split,
-                    "window": window,
-                    "test_date": test_date,
-                    "liquidity_group": group_name,
-                    "train_start_date": train_dates[0],
-                    "train_end_date": train_dates[-1],
-                    "train_day_count": len(train_dates),
-                }
-                group_metrics, group_detail, group_backtest = _evaluate_predictions(pred_df, horizons, config, meta)
-                metrics_rows.extend(group_metrics)
-                if not group_detail.empty:
-                    detail_dfs.append(group_detail)
-                if not group_backtest.empty:
-                    backtest_dfs.append(group_backtest)
-
-    _write_reports(output_root, metrics_rows, detail_dfs, backtest_dfs)
+    tasks, dataset_path, _ = build_rolling_tasks(config)
+    all_columns = _schema_columns(dataset_path)
+    print(f"[rolling] train phase tasks={len(tasks)}", flush=True)
+    completed_tasks: list[dict[str, Any]] = []
+    for task in tasks:
+        result = train_rolling_task(config, task, dataset_path, all_columns, overwrite_models=overwrite_models)
+        if result.get("status") in {"trained", "empty_train"}:
+            completed_tasks.append(task)
+    print(f"[rolling] predict phase tasks={len(completed_tasks)}", flush=True)
+    run_rolling_predictions(config, completed_tasks, dataset_path, all_columns, predict_workers=predict_workers)
     tmp_root = output_root / "_tmp"
     if tmp_root.exists() and not bool(config.get("rolling_keep_intermediate", False)):
         shutil.rmtree(tmp_root)

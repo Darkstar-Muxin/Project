@@ -112,5 +112,8 @@ rolling_model_dir: data/models/rolling
 rolling_output_dir: data/outputs/rolling
 rolling_batch_size: 300000
 rolling_keep_intermediate: false
+rolling_overwrite_models: false
+rolling_train_workers: 1
+rolling_predict_workers: 1
 rolling_liquidity_high_quantile: 0.70
 rolling_liquidity_low_quantile: 0.30

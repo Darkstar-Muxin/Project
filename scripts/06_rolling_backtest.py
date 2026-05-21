@@ -14,10 +14,12 @@ from src.rolling_train import run_rolling_backtest
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--overwrite-models", action="store_true", help="retrain rolling models even if artifacts already exist")
+    parser.add_argument("--predict-workers", type=int, default=None, help="CPU worker count for prediction/evaluation")
     args = parser.parse_args()
 
     config = load_config(args.config)
-    run_rolling_backtest(config)
+    run_rolling_backtest(config, overwrite_models=args.overwrite_models or None, predict_workers=args.predict_workers)
     print("rolling backtest completed")
 
 

@@ -1,4 +1,4 @@
-# A股分类建模的最优交易完成时间推荐系统
+# A 股最优交易完成时间推荐系统
 
 本项目用于在给定股票代码、买卖方向、交易数量和开始时间后，推荐 5/10/15/30/60 分钟中的最优交易完成区间。推荐规则是：买入选择满足 30% 成交占比约束下预测 VWAP 最低的区间；卖出选择满足约束下预测 VWAP 最高的区间。
 
@@ -6,7 +6,7 @@
 
 ## 数据与缓存
 
-原始数据：
+原始数据统一读取：
 
 ```text
 data/tick_data/YYYYMMDD.parquet
@@ -18,13 +18,11 @@ data/tick_data/YYYYMMDD.parquet
 StockCode, Date, Time, Price, Volume, Turnover, BSFlag
 ```
 
-预处理默认不会合并大表，只生成每日分钟缓存：
+预处理默认不合并大表，只生成每日分钟缓存：
 
 ```text
 data/processed/minute_parts/YYYYMMDD.parquet
 ```
-
-`data/processed/minute_data.parquet` 是可选产物，默认不生成。项目不通过抽样减少数据量，所有有效 tick 都参与分钟聚合；性能问题通过逐日处理、parquet batch、按日期读取、懒加载和 batch 训练解决。
 
 特征也默认按日保存：
 
@@ -32,56 +30,33 @@ data/processed/minute_parts/YYYYMMDD.parquet
 data/features/model_parts/YYYYMMDD.parquet
 ```
 
-`data/features/model_dataset.parquet` 是可选合并产物，默认不生成，避免内存占满。
+项目不通过抽样减少数据量。性能通过逐日处理、parquet batch、按日期读取、懒加载、batch 训练和多进程任务拆分解决。
 
-## 样本划分与 Rolling 口径
+## Rolling 口径
 
-配置在 `config.yaml`：
+当前样本期配置在 `config.yaml`：
 
 ```yaml
-train_months: [202602, 202603]
-test_months: [202604]
 rolling_train_months: [202602, 202603]
 rolling_test_months: [202604]
 rolling_windows: [5, 8]
 ```
 
-rolling 是主流程。样本内和样本外都用同一逻辑：对每个预测日，只使用该日前最近 N 个交易日训练，并只预测该日。`split=train` 的 rolling 结果用于调窗口和模型超参数；`split=test` 的 rolling 结果用于最终样本外报告。
+样本内和样本外都使用同一 rolling 逻辑：对每个预测日，只使用该日前最近 N 个交易日训练，并只预测该日。`split=train` 的结果用于调窗口和模型超参数；`split=test` 用于最终样本外报告。
 
-## 流动性分类
-
-流动性分类不能使用全样本。rolling 主流程会在每个 `test_date + window` 上重新分类：
-
-- 只使用预测日前最近 N 个交易日。
-- 对每只股票计算窗口内平均日成交额、平均日成交量、平均日成交笔数。
-- 主要按平均日成交额分位数划分：高流动性、中流动性、低流动性。
-- 分类结果保存到：
+流动性分类也在每个 `test_date + window` 上重新计算，只使用预测日前窗口内的数据。分类依据是股票在窗口内的平均日成交额、日成交量和成交笔数，主要按平均日成交额分位数分为 `high / medium / low`。分类结果保存到：
 
 ```text
 data/models/rolling/window_{N}d/{test_date}/stock_liquidity_group.parquet
 ```
 
-全局 `data/processed/stock_liquidity_group.parquet` 只作为可选 baseline 参考，rolling 主模型不依赖它。
+## 特征与标签
 
-## 特征
+分钟聚合字段包括 `open, high, low, close, volume, amount, vwap, trade_count, buy_volume, sell_volume, buy_amount, sell_amount`。
 
-分钟聚合字段：
-
-- 行情：`open, high, low, close, vwap`
-- 成交：`volume, amount, trade_count`
-- 买卖方向成交：`buy_volume, sell_volume, buy_amount, sell_amount`
-
-模型候选特征包括：
-
-- 行情特征：价格、VWAP、成交量、成交额、成交笔数、买卖成交不平衡、1/5/10 分钟收益率、5/10/20 分钟滚动成交量、滚动成交额、滚动 VWAP、滚动波动率、VWAP 偏离。
-- 历史统计特征：过去 5/10 日股票日均量、日均额、日均 VWAP；同股票同分钟历史均值；历史同分钟 volume ratio 均值；历史同分钟累计成交进度均值。
-- 时间特征：分钟序号、距开盘分钟数、距收盘分钟数、上午/下午标记、绝对时间 sin/cos。
-- IVE 特征：分钟成交量、累计成交量、成交额、累计成交额、股票 embedding、流动性组 embedding、位置编码、绝对时间编码。
-- 交易要素：买卖方向、交易数量、交易数量相对预测成交量/历史成交量的占比主要在推理和推荐阶段使用。
+模型候选特征包括行情特征、历史统计特征、时间特征、股票代码特征和 IVE 风格特征。历史特征默认最多使用前 10 个历史交易日，包括股票日均量/额/VWAP、同股票同分钟历史均值、历史同分钟 volume ratio 和累计成交进度等。
 
 当前 tick 数据没有 bid/ask/order book 字段，因此盘口特征仅作为预留能力，不伪造。
-
-## 标签
 
 每个 horizon 构造：
 
@@ -92,19 +67,18 @@ future_volume_ratio_{h}
 log_future_volume_ratio_{h}
 ```
 
-标签严格在同一股票、同一交易日内构造，不跨日、不跨股票。
+标签严格在同股票、同交易日内构造，不跨日、不跨股票。标签只用于训练和历史评估，不进入预测输入。
 
-## 防止未来信息泄露
+## 防未来信息泄露
 
-当前主流程遵守以下规则：
+主流程遵守以下规则：
 
-- 不使用全样本流动性分类；rolling 分类只用预测日前窗口数据。
+- 不使用全样本流动性分类，rolling 分类只用预测日前窗口数据。
 - 不默认生成或读取全量 `minute_data.parquet` / `model_dataset.parquet`。
 - 模型输入排除当天全天才知道的字段：`daily_volume, daily_amount, volume_ratio, accumulated_volume_ratio, amount_ratio, accumulated_amount_ratio`。
-- 但保留历史日的 ratio/profile 信息，例如 `same_minute_volume_ratio_mean_*d` 和 `same_minute_accumulated_volume_ratio_mean_*d`。
-- 历史同分钟、历史日均等特征使用 `shift(1)`，当前日特征只引用历史日。
-- feature part 不生成全局流动性组历史特征；rolling 阶段才注入窗口分类。
-- future labels 只用于训练和历史评估，不作为预测输入。
+- 历史日的 ratio/profile 特征可以使用，例如 `same_minute_volume_ratio_mean_*d` 和 `same_minute_accumulated_volume_ratio_mean_*d`。
+- 历史同分钟、历史日均等特征使用滞后窗口，当前日特征只引用历史日。
+- future labels 只用于训练和评估，不作为预测输入。
 - volume ratio 反推成交量时，使用 rolling 训练窗口中的历史日均量先验，不使用预测日真实全天成交量。
 
 ## 模型
@@ -115,22 +89,32 @@ log_future_volume_ratio_{h}
 - 股票 embedding
 - 流动性组 embedding
 - sinusoidal positional encoding
-- absolute time encoding
 - Transformer encoder
 - 多 horizon 输出头
 
-模型输出：
+训练损失为：
 
-- `predicted_vwap`
-- `predicted_market_volume`
-- `predicted_volume_ratio`
-- `predicted_volume_sigma`
-- `predicted_participation`
+```text
+成交量比例 Gaussian NLL + VWAP return SmoothL1Loss
+```
+
+预测阶段使用 `model.eval()` 和 `torch.no_grad()`，不会反向传播，也不会更新模型参数。因此 `06` 主流程已经拆成“先训练、后预测评估”。
 
 rolling 模型保存到：
 
 ```text
 data/models/rolling/window_{N}d/{test_date}/{liquidity_group}/
+```
+
+每个组目录包含：
+
+```text
+ive_model.pt
+model_meta.json
+feature_columns.joblib
+stock_vocab.joblib
+group_vocab.joblib
+normalizer.joblib
 ```
 
 ## 运行方式
@@ -159,43 +143,63 @@ python scripts/01_preprocess.py --config config.yaml
 python scripts/02_build_features_labels.py --config config.yaml
 ```
 
-并行构建每日特征和标签（可选，不替代原脚本）：
+并行构建每日特征和标签：
 
 ```bash
 python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2
-```
-
-并行版使用 Python 标准库 `multiprocessing.Pool`，以“交易日”为任务并发生成 `data/features/model_parts/YYYYMMDD.parquet`。每个 worker 会读取当前日和最多前 10 个历史日，worker 数不要开太大；机器内存紧张时建议 `--workers 1` 或 `--workers 2`。默认跳过已存在的 feature part；如需重算，添加 `--overwrite`。
-
-并行版默认使用 `--maxtasks-per-child 1`，每个 worker 处理完一个交易日后会退出重建，用来把 pandas/numpy 的峰值内存还给操作系统。如果内存仍然上升，先降低 worker 数：
-
-```bash
-python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202603
-```
-
-计算优化说明：feature builder 会读取当前日和最多前 10 个历史日来计算历史滞后特征，但 future labels 只对当前目标日计算；同分钟历史统计直接基于分钟缓存行生成，避免重复大范围聚合。
-
-也可以按月份分批计算：
-
-```bash
 python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202602
-python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202603
-python scripts/02_build_features_labels_parallel.py --config config.yaml --workers 2 --months 202604
 ```
 
-`--months` 只限制“要输出哪些日期”的 feature parts；计算历史滞后特征时，仍会使用目标日期之前已经存在的分钟缓存作为历史窗口。
+并行版按交易日生成 `data/features/model_parts/YYYYMMDD.parquet`，默认跳过已存在文件；如需重算加 `--overwrite`。每个 worker 读取当前日和最多前 10 个历史日，默认 `--maxtasks-per-child 1`，用来释放 pandas/numpy 峰值内存。
 
-运行 rolling 训练和回测，这是主流程：
+串行 rolling 训练和回测：
 
 ```bash
 python scripts/06_rolling_backtest.py --config config.yaml
 ```
 
-静态训练和评估只作为 optional baseline：
+默认先训练所有 rolling 任务，再用 CPU 预测评估并汇总报告。默认不覆盖已有模型；如需重训：
 
 ```bash
-python scripts/03_train_models.py --config config.yaml
-python scripts/04_evaluate.py --config config.yaml
+python scripts/06_rolling_backtest.py --config config.yaml --overwrite-models
+```
+
+CPU 多进程预测评估：
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml --predict-workers 4
+```
+
+多 GPU rolling 训练入口：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --train-workers 2 --predict-workers 4
+```
+
+并行训练版按 `date + window` 分发任务到可见 GPU。每个任务内部仍按 `high / medium / low` 顺序训练，避免同一日期内部抢显存。也可以显式指定卡：
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --devices 0,1 --train-workers 2 --predict-workers 4
+```
+
+预测评估分片写入：
+
+```text
+data/outputs/rolling/parts/window_{N}d/{test_date}/{liquidity_group}/
+```
+
+最终仍汇总为原有报告文件：
+
+```text
+rolling_evaluation_metrics.csv
+rolling_prediction_error_detail.csv
+rolling_prediction_error_by_date.csv
+rolling_prediction_error_by_stock.csv
+rolling_prediction_error_by_minute.csv
+rolling_recommendation_backtest_detail.csv
+rolling_recommendation_backtest_summary.csv
+rolling_recommendation_backtest_worst_cases.csv
+rolling_window_comparison.csv
 ```
 
 启动网页：
@@ -206,15 +210,15 @@ streamlit run app/streamlit_app.py
 
 ## 核心文件
 
-- `src/preprocess.py`：逐日、分 batch 读取 tick；聚合为分钟 OHLCV/VWAP；保存每日分钟缓存。
-- `src/stock_classification.py`：生成 baseline 流动性分类；rolling 主流程不依赖全样本分类。
-- `src/feature_engineering.py`：按日构建行情、历史统计、时间、IVE 特征和 future labels；默认输出每日 feature part。
-- `scripts/02_build_features_labels_parallel.py`：使用 `multiprocessing.Pool` 按交易日多进程构建 feature parts，适合在内存允许时加速 `02`。
-- `src/label_builder.py`：同股票、同交易日内构造未来 VWAP、成交量和 volume ratio 标签。
-- `src/ive_dataset.py`：构造 390 分钟上下文序列，做标准化、padding mask、股票 ID、流动性组 ID；排除泄露字段。
+- `src/preprocess.py`：逐日、分 batch 读取 tick，聚合为分钟 OHLCV/VWAP，保存每日分钟缓存。
+- `src/feature_engineering.py`：按日构建行情、历史统计、时间、IVE 特征和 future labels。
+- `scripts/02_build_features_labels_parallel.py`：按交易日多进程构建 feature parts。
+- `src/ive_dataset.py`：构造 390 分钟上下文序列，做标准化、padding mask、股票 ID、流动性组 ID，并排除泄露字段。
 - `src/ive_model.py`：IVE 风格 Transformer 模型。
-- `src/rolling_train.py`：主流程；按 split/date/window 读取所需日期、做窗口流动性分类、训练模型、预测当天、输出评估和回测。
-- `src/predict.py`：单笔预测推荐；读取对应日期 feature part 和 rolling 窗口分类。
+- `src/train.py`：模型训练、损失函数、模型保存。
+- `src/rolling_train.py`：主 rolling 流程；窗口分类、训练/预测分离、CPU 预测并行、报告汇总。
+- `scripts/06_rolling_backtest_parallel.py`：多 GPU date/window 级训练调度入口。
+- `src/predict.py`：单笔预测推荐，读取对应 rolling 模型和窗口分类。
 - `app/streamlit_app.py`：网页 Demo 和报告展示。
 
 ## 网页功能
@@ -227,6 +231,6 @@ streamlit run app/streamlit_app.py
 - 可视化：价格/VWAP 曲线、候选区间 VWAP 曲线、成交占比与 30% 约束线、volume ratio 不确定性。
 - 报告：样本内/样本外 rolling 准确性、window 对比、流动性组和 horizon 对比、日期/股票/分钟误差、推荐命中率、regret、worst cases。
 
-## 后续维护约定
+## 维护约定
 
 后续每次修改核心流程、数据口径、特征、模型、评估或网页展示时，都要同步更新本 README 和 `PROJECT_CONTEXT.md`。

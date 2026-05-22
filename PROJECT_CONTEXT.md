@@ -247,8 +247,11 @@ python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202
 
 预测评估性能优化状态：
 
-- 预测任务按 `date + window` 拆分，不再按 `date + window + liquidity_group` 拆分。
-- 每个 worker 对同一天只读取一次 feature part，然后顺序处理 `high / medium / low`。
+- 预测任务默认按 `date + window` 拆分，每个 worker 对同一天只读取一次 feature part，然后顺序处理 `high / medium / low`。
+- 预测可用 `--predict-unit group` 改为按 `date + window + liquidity_group` 拆分，适合早期大日期的 `medium` 组长时间占住 worker 时做负载均衡。
+- 预测可用 `--skip-existing-predictions` 跳过已完成分片；完成条件是对应 `window/date/group` 下 `metrics.csv`、`detail.parquet`、`backtest.parquet` 都存在。
+- 分月补跑时可加 `--skip-final-reports` 只写 `data/outputs/rolling/parts/...`，避免多个预测批次抢写最终 CSV。
+- 所有分片完成后可用 `--aggregate-only` 只扫描已有 parts 并生成最终报告。
 - `IVEDataset` 使用数组保存每行所属交易日序列起点，替代逐行 Python dict。
 - `_predict_frame` 不再使用 PyTorch DataLoader 逐样本调用 `__getitem__`，而是手写 batch 构造上下文张量，减少 Python/collate 开销。
 - 推荐回测使用 numpy 向量化计算推荐 horizon、真实最优 horizon 和 regret。
@@ -268,6 +271,15 @@ CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config
 
 ```text
 data/outputs/rolling/parts/window_{N}d/{test_date}/{liquidity_group}/
+```
+
+推荐分月补跑命令：
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202602 --windows 5 --predict-only --predict-workers 6 --predict-unit group --skip-existing-predictions --skip-final-reports
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202603 --windows 5 --predict-only --predict-workers 6 --predict-unit group --skip-existing-predictions --skip-final-reports
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --predict-only --predict-workers 6 --predict-unit group --skip-existing-predictions --skip-final-reports
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --windows 5 --aggregate-only
 ```
 
 最终报告仍写入：

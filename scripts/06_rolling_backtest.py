@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.config import load_config
-from src.rolling_train import run_rolling_backtest
+from src.rolling_train import aggregate_rolling_prediction_parts, run_rolling_backtest
 
 
 def main() -> None:
@@ -20,11 +20,24 @@ def main() -> None:
     parser.add_argument("--months", nargs="+", default=None, help="target months to run, e.g. --months 202604")
     parser.add_argument("--train-only", action="store_true", help="train rolling models and skip prediction/evaluation")
     parser.add_argument("--predict-only", action="store_true", help="skip training and run prediction/evaluation from existing models")
+    parser.add_argument("--skip-existing-predictions", action="store_true", help="skip prediction parts whose outputs already exist")
+    parser.add_argument("--skip-final-reports", action="store_true", help="write prediction parts only; skip final report aggregation")
+    parser.add_argument("--aggregate-only", action="store_true", help="skip train/predict and aggregate existing prediction parts into final reports")
+    parser.add_argument(
+        "--predict-unit",
+        choices=["day", "group"],
+        default=None,
+        help="parallel prediction unit; group balances large liquidity groups but reads each day more than once",
+    )
     args = parser.parse_args()
     if args.train_only and args.predict_only:
         parser.error("--train-only and --predict-only cannot be used together")
 
     config = load_config(args.config)
+    if args.aggregate_only:
+        aggregate_rolling_prediction_parts(config, windows=args.windows, months=args.months)
+        print("rolling aggregation completed")
+        return
     run_rolling_backtest(
         config,
         overwrite_models=args.overwrite_models or None,
@@ -33,6 +46,9 @@ def main() -> None:
         months=args.months,
         train_only=args.train_only,
         predict_only=args.predict_only,
+        predict_unit=args.predict_unit,
+        skip_existing_predictions=args.skip_existing_predictions,
+        write_final_reports=not args.skip_final_reports,
     )
     print("rolling backtest completed")
 

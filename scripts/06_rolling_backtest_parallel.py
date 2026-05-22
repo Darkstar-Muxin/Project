@@ -56,12 +56,26 @@ def main() -> None:
     parser.add_argument("--months", nargs="+", default=None, help="target months to run, e.g. --months 202604")
     parser.add_argument("--train-only", action="store_true", help="train rolling models and skip prediction/evaluation")
     parser.add_argument("--predict-only", action="store_true", help="skip training and run prediction/evaluation from existing models")
+    parser.add_argument("--skip-existing-predictions", action="store_true", help="skip prediction parts whose outputs already exist")
+    parser.add_argument("--skip-final-reports", action="store_true", help="write prediction parts only; skip final report aggregation")
+    parser.add_argument("--aggregate-only", action="store_true", help="skip train/predict and aggregate existing prediction parts into final reports")
+    parser.add_argument(
+        "--predict-unit",
+        choices=["day", "group"],
+        default=None,
+        help="parallel prediction unit; group balances large liquidity groups but reads each day more than once",
+    )
     args = parser.parse_args()
     if args.train_only and args.predict_only:
         parser.error("--train-only and --predict-only cannot be used together")
 
     config = load_config(args.config)
-    from src.rolling_train import _schema_columns, build_rolling_tasks, run_rolling_predictions
+    from src.rolling_train import _schema_columns, aggregate_rolling_prediction_parts, build_rolling_tasks, run_rolling_predictions
+
+    if args.aggregate_only:
+        aggregate_rolling_prediction_parts(config, windows=args.windows, months=args.months)
+        print("parallel rolling aggregation completed")
+        return
 
     tasks, dataset_path, _ = build_rolling_tasks(config, windows=args.windows, months=args.months)
     all_columns = _schema_columns(dataset_path)
@@ -70,7 +84,16 @@ def main() -> None:
     devices = _visible_devices(train_workers, args.devices)
     if args.predict_only:
         print(f"[parallel-train] predict-only; skip training tasks={len(tasks)}", flush=True)
-        run_rolling_predictions(config, tasks, dataset_path, all_columns, predict_workers=args.predict_workers)
+        run_rolling_predictions(
+            config,
+            tasks,
+            dataset_path,
+            all_columns,
+            predict_workers=args.predict_workers,
+            predict_unit=args.predict_unit,
+            skip_existing_predictions=args.skip_existing_predictions,
+            write_final_reports=not args.skip_final_reports,
+        )
         print("parallel rolling prediction completed")
         return
     payloads = [
@@ -98,7 +121,16 @@ def main() -> None:
         print("[parallel-train] train-only completed; skip prediction/evaluation", flush=True)
         return
     print(f"[parallel-train] training completed; start prediction/evaluation", flush=True)
-    run_rolling_predictions(config, tasks, dataset_path, all_columns, predict_workers=args.predict_workers)
+    run_rolling_predictions(
+        config,
+        tasks,
+        dataset_path,
+        all_columns,
+        predict_workers=args.predict_workers,
+        predict_unit=args.predict_unit,
+        skip_existing_predictions=args.skip_existing_predictions,
+        write_final_reports=not args.skip_final_reports,
+    )
     print("parallel rolling backtest completed")
 
 

@@ -233,6 +233,32 @@ CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config
 python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --predict-only --predict-workers 4
 ```
 
+预测默认按 `date + window` 并行。若某些日期的 `medium` 组特别大，后续日期已跑完而早期大组仍占住 worker，可改用 `--predict-unit group`，把 `date + window + liquidity_group` 作为并行单位：
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202602 --windows 5 --predict-only --predict-workers 6 --predict-unit group
+```
+
+预测分片已存在时可用 `--skip-existing-predictions` 跳过已完成的 `window/date/group`。只有该分片下 `metrics.csv`、`detail.parquet`、`backtest.parquet` 都存在时才认为完成：
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202602 --windows 5 --predict-only --predict-workers 6 --predict-unit group --skip-existing-predictions
+```
+
+分月补跑时建议先只写分片、不生成最终总表，避免多个批次抢写 `data/outputs/rolling/*.csv`：
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202602 --windows 5 --predict-only --predict-workers 6 --predict-unit group --skip-existing-predictions --skip-final-reports
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202603 --windows 5 --predict-only --predict-workers 6 --predict-unit group --skip-existing-predictions --skip-final-reports
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --predict-only --predict-workers 6 --predict-unit group --skip-existing-predictions --skip-final-reports
+```
+
+所有月份分片都完成后，再单独汇总最终报告：
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --windows 5 --aggregate-only
+```
+
 并行训练版按 `date + window` 分发任务到可见 GPU。每个任务内部仍按 `high / medium / low` 顺序训练，避免同一日期内部抢显存。也可以显式指定卡：
 
 ```bash

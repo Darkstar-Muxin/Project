@@ -461,6 +461,55 @@ def _write_reports(output_root: Path, metrics_rows: list[dict[str, Any]], detail
         ).to_csv(output_root / "rolling_window_comparison.csv", index=False, encoding="utf-8-sig")
 
 
+def _part_result_from_dir(part_dir: Path) -> dict[str, Any]:
+    date_dir = part_dir.parent
+    window_dir = date_dir.parent
+    window_text = window_dir.name.removeprefix("window_").removesuffix("d")
+    return {
+        "status": "skipped_existing",
+        "window": int(window_text),
+        "test_date": date_dir.name,
+        "group": part_dir.name,
+        "paths": {
+            "metrics": str(part_dir / "metrics.csv") if (part_dir / "metrics.csv").exists() else "",
+            "detail": str(part_dir / "detail.parquet") if (part_dir / "detail.parquet").exists() else "",
+            "backtest": str(part_dir / "backtest.parquet") if (part_dir / "backtest.parquet").exists() else "",
+        },
+    }
+
+
+def aggregate_rolling_prediction_parts(
+    config: dict[str, Any],
+    windows: list[int] | None = None,
+    months: list[int | str] | None = None,
+) -> list[dict[str, Any]]:
+    output_root = resolve_path(config.get("rolling_output_dir", "data/outputs/rolling"))
+    output_root.mkdir(parents=True, exist_ok=True)
+    parts_root = output_root / "parts"
+    window_set = {int(window) for window in windows} if windows else None
+    month_set = {str(month) for month in months} if months else None
+    results: list[dict[str, Any]] = []
+    if not parts_root.exists():
+        _write_reports(output_root, [], [], [])
+        return results
+    for part_dir in sorted(parts_root.glob("window_*d/*/*")):
+        if not part_dir.is_dir():
+            continue
+        result = _part_result_from_dir(part_dir)
+        if window_set is not None and int(result["window"]) not in window_set:
+            continue
+        if month_set is not None and str(result["test_date"]).replace("-", "")[:6] not in month_set:
+            continue
+        paths = result["paths"]
+        if not paths.get("metrics") and not paths.get("detail") and not paths.get("backtest"):
+            continue
+        results.append(result)
+    metrics_rows, detail_dfs, backtest_dfs = _collect_part_reports(results)
+    _write_reports(output_root, metrics_rows, detail_dfs, backtest_dfs)
+    print(f"[rolling-predict] aggregated parts={len(results)} output={output_root}", flush=True)
+    return results
+
+
 def _schema_columns(dataset_path: Path) -> list[str]:
     if dataset_path.is_dir():
         parts = sorted(path for path in dataset_path.glob("*.parquet") if path.stem[:8].isdigit())
@@ -536,6 +585,21 @@ def _part_dir(output_root: Path, task: dict[str, Any], group_name: str) -> Path:
     return output_root / "parts" / f"window_{int(task['window'])}d" / str(task["test_date"]) / group_name
 
 
+def _prediction_part_paths(output_root: Path, task: dict[str, Any], group_name: str) -> dict[str, str]:
+    part_dir = _part_dir(output_root, task, group_name)
+    paths = {
+        "metrics": part_dir / "metrics.csv",
+        "detail": part_dir / "detail.parquet",
+        "backtest": part_dir / "backtest.parquet",
+    }
+    return {name: str(path) if path.exists() else "" for name, path in paths.items()}
+
+
+def _prediction_part_complete(output_root: Path, task: dict[str, Any], group_name: str) -> bool:
+    part_dir = _part_dir(output_root, task, group_name)
+    return all((part_dir / name).exists() for name in ["metrics.csv", "detail.parquet", "backtest.parquet"])
+
+
 def _write_prediction_part(
     output_root: Path,
     task: dict[str, Any],
@@ -576,8 +640,16 @@ def predict_rolling_group_task(payload: dict[str, Any]) -> dict[str, Any]:
     group_name = str(payload["group_name"])
     dataset_path = Path(payload["dataset_path"])
     all_columns = payload["all_columns"]
+    skip_existing = bool(payload.get("skip_existing_predictions", False))
     batch_size = int(config.get("rolling_batch_size", 300_000))
     output_root = resolve_path(config.get("rolling_output_dir", "data/outputs/rolling"))
+    if skip_existing and _prediction_part_complete(output_root, task, group_name):
+        print(
+            f"[rolling-predict] skip existing split={task['split']} test_date={task['test_date']} "
+            f"window={task['window']} group={group_name}",
+            flush=True,
+        )
+        return {**task, "group": group_name, "status": "skipped_existing", "paths": _prediction_part_paths(output_root, task, group_name)}
     group_model_root = _task_model_root(config, task)
     group_path = group_model_root / group_name
     if not _model_artifacts_complete(group_path):
@@ -632,9 +704,21 @@ def predict_rolling_day_task(payload: dict[str, Any]) -> list[dict[str, Any]]:
     task = payload["task"]
     dataset_path = Path(payload["dataset_path"])
     all_columns = payload["all_columns"]
+    skip_existing = bool(payload.get("skip_existing_predictions", False))
     batch_size = int(config.get("rolling_batch_size", 300_000))
     output_root = resolve_path(config.get("rolling_output_dir", "data/outputs/rolling"))
     group_model_root = _task_model_root(config, task)
+    existing_groups = {
+        group_name
+        for group_name in GROUPS
+        if skip_existing and _prediction_part_complete(output_root, task, group_name)
+    }
+    if len(existing_groups) == len(GROUPS):
+        print(f"[rolling-predict] skip existing day test_date={task['test_date']} window={task['window']}", flush=True)
+        return [
+            {**task, "group": group_name, "status": "skipped_existing", "paths": _prediction_part_paths(output_root, task, group_name)}
+            for group_name in GROUPS
+        ]
     liquidity_path = group_model_root / "stock_liquidity_group.parquet"
     if not liquidity_path.exists():
         return [{**task, "group": group_name, "status": "missing_liquidity"} for group_name in GROUPS]
@@ -662,6 +746,14 @@ def predict_rolling_day_task(payload: dict[str, Any]) -> list[dict[str, Any]]:
     )
     results: list[dict[str, Any]] = []
     for group_name in GROUPS:
+        if group_name in existing_groups:
+            print(
+                f"[rolling-predict] skip existing split={task['split']} test_date={task['test_date']} "
+                f"window={task['window']} group={group_name}",
+                flush=True,
+            )
+            results.append({**task, "group": group_name, "status": "skipped_existing", "paths": _prediction_part_paths(output_root, task, group_name)})
+            continue
         group_path = group_model_root / group_name
         if not _model_artifacts_complete(group_path):
             results.append({**task, "group": group_name, "status": "missing_model"})
@@ -706,6 +798,7 @@ def _prediction_payloads(
     tasks: list[dict[str, Any]],
     dataset_path: Path,
     all_columns: list[str],
+    skip_existing_predictions: bool = False,
 ) -> list[dict[str, Any]]:
     return [
         {
@@ -713,7 +806,30 @@ def _prediction_payloads(
             "task": task,
             "dataset_path": str(dataset_path),
             "all_columns": all_columns,
+            "skip_existing_predictions": skip_existing_predictions,
         }
+        for task in tasks
+    ]
+
+
+def _prediction_group_payloads(
+    config: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    dataset_path: Path,
+    all_columns: list[str],
+    skip_existing_predictions: bool = False,
+) -> list[dict[str, Any]]:
+    # Submit likely-heavy medium groups first so long group/date jobs spread across workers.
+    return [
+        {
+            "config": config,
+            "task": task,
+            "group_name": group_name,
+            "dataset_path": str(dataset_path),
+            "all_columns": all_columns,
+            "skip_existing_predictions": skip_existing_predictions,
+        }
+        for group_name in ["medium", "high", "low"]
         for task in tasks
     ]
 
@@ -723,7 +839,7 @@ def _collect_part_reports(part_results: list[dict[str, Any]]) -> tuple[list[dict
     detail_dfs: list[pd.DataFrame] = []
     backtest_dfs: list[pd.DataFrame] = []
     for result in part_results:
-        if result.get("status") != "predicted":
+        if result.get("status") not in {"predicted", "skipped_existing"}:
             continue
         paths = result.get("paths", {})
         metrics_raw = paths.get("metrics", "")
@@ -753,24 +869,43 @@ def run_rolling_predictions(
     dataset_path: str | Path,
     all_columns: list[str],
     predict_workers: int | None = None,
+    predict_unit: str | None = None,
+    skip_existing_predictions: bool = False,
+    write_final_reports: bool = True,
 ) -> list[dict[str, Any]]:
     output_root = resolve_path(config.get("rolling_output_dir", "data/outputs/rolling"))
     output_root.mkdir(parents=True, exist_ok=True)
     workers = int(predict_workers if predict_workers is not None else config.get("rolling_predict_workers", 1))
     workers = max(workers, 1)
-    payloads = _prediction_payloads(config, tasks, Path(dataset_path), all_columns)
-    if not payloads:
+    unit = str(predict_unit or config.get("rolling_predict_unit", "day")).lower()
+    if unit not in {"day", "group"}:
+        raise ValueError(f"rolling_predict_unit must be 'day' or 'group', got {unit!r}")
+    skip_existing = bool(skip_existing_predictions or config.get("rolling_skip_existing_predictions", False))
+    if not tasks:
         return []
-    print(f"[rolling-predict] day_tasks={len(payloads)} workers={workers}", flush=True)
-    if workers == 1:
-        nested_results = [predict_rolling_day_task(payload) for payload in payloads]
+    print(f"[rolling-predict] unit={unit} tasks={len(tasks)} workers={workers} skip_existing={skip_existing}", flush=True)
+    if unit == "group":
+        payloads = _prediction_group_payloads(config, tasks, Path(dataset_path), all_columns, skip_existing)
+        if workers == 1:
+            results = [predict_rolling_group_task(payload) for payload in payloads]
+        else:
+            ctx = mp.get_context("spawn")
+            with ctx.Pool(processes=workers, maxtasksperchild=1) as pool:
+                results = list(pool.imap_unordered(predict_rolling_group_task, payloads))
     else:
-        ctx = mp.get_context("spawn")
-        with ctx.Pool(processes=workers, maxtasksperchild=1) as pool:
-            nested_results = list(pool.imap_unordered(predict_rolling_day_task, payloads))
-    results = [result for day_results in nested_results for result in day_results]
-    metrics_rows, detail_dfs, backtest_dfs = _collect_part_reports(results)
-    _write_reports(output_root, metrics_rows, detail_dfs, backtest_dfs)
+        payloads = _prediction_payloads(config, tasks, Path(dataset_path), all_columns, skip_existing)
+        if workers == 1:
+            nested_results = [predict_rolling_day_task(payload) for payload in payloads]
+        else:
+            ctx = mp.get_context("spawn")
+            with ctx.Pool(processes=workers, maxtasksperchild=1) as pool:
+                nested_results = list(pool.imap_unordered(predict_rolling_day_task, payloads))
+        results = [result for day_results in nested_results for result in day_results]
+    if write_final_reports:
+        metrics_rows, detail_dfs, backtest_dfs = _collect_part_reports(results)
+        _write_reports(output_root, metrics_rows, detail_dfs, backtest_dfs)
+    else:
+        print(f"[rolling-predict] skip final reports; parts remain under {output_root / 'parts'}", flush=True)
     return results
 
 
@@ -782,6 +917,9 @@ def run_rolling_backtest(
     months: list[int | str] | None = None,
     train_only: bool = False,
     predict_only: bool = False,
+    predict_unit: str | None = None,
+    skip_existing_predictions: bool = False,
+    write_final_reports: bool = True,
 ) -> None:
     ensure_dirs(config)
     model_root = resolve_path(config.get("rolling_model_dir", "data/models/rolling"))
@@ -792,7 +930,16 @@ def run_rolling_backtest(
     all_columns = _schema_columns(dataset_path)
     if predict_only:
         print(f"[rolling] predict-only tasks={len(tasks)}", flush=True)
-        run_rolling_predictions(config, tasks, dataset_path, all_columns, predict_workers=predict_workers)
+        run_rolling_predictions(
+            config,
+            tasks,
+            dataset_path,
+            all_columns,
+            predict_workers=predict_workers,
+            predict_unit=predict_unit,
+            skip_existing_predictions=skip_existing_predictions,
+            write_final_reports=write_final_reports,
+        )
         return
     print(f"[rolling] train phase tasks={len(tasks)}", flush=True)
     completed_tasks: list[dict[str, Any]] = []
@@ -804,7 +951,16 @@ def run_rolling_backtest(
         print(f"[rolling] train-only completed tasks={len(completed_tasks)}", flush=True)
         return
     print(f"[rolling] predict phase tasks={len(completed_tasks)}", flush=True)
-    run_rolling_predictions(config, completed_tasks, dataset_path, all_columns, predict_workers=predict_workers)
+    run_rolling_predictions(
+        config,
+        completed_tasks,
+        dataset_path,
+        all_columns,
+        predict_workers=predict_workers,
+        predict_unit=predict_unit,
+        skip_existing_predictions=skip_existing_predictions,
+        write_final_reports=write_final_reports,
+    )
     tmp_root = output_root / "_tmp"
     if tmp_root.exists() and not bool(config.get("rolling_keep_intermediate", False)):
         shutil.rmtree(tmp_root)

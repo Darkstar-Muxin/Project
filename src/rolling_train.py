@@ -317,51 +317,67 @@ def _evaluate_predictions(
         detail["minute_of_day"] = pd.to_datetime(detail["datetime"]).dt.hour * 60 + pd.to_datetime(detail["datetime"]).dt.minute
         detail_parts.append(detail)
 
-    backtest_rows: list[dict[str, Any]] = []
-    for _, sample in pred_df.iterrows():
-        pred_candidates: list[dict[str, Any]] = []
-        true_candidates: list[dict[str, Any]] = []
-        for h in horizons:
-            pred_volume = float(sample.get(f"predicted_volume_{h}", np.nan))
-            true_volume = float(sample.get(f"future_volume_{h}", np.nan))
-            pred_vwap = float(sample.get(f"predicted_vwap_{h}", np.nan))
-            true_vwap = float(sample.get(f"future_vwap_{h}", np.nan))
-            pred_part = order_qty / pred_volume if pred_volume > 0 else np.inf
-            true_part = order_qty / true_volume if true_volume > 0 else np.inf
-            pred_candidates.append({"horizon": h, "vwap": pred_vwap, "volume": pred_volume, "participation": pred_part, "feasible": pred_part <= participation_limit})
-            if np.isfinite(true_vwap):
-                true_candidates.append({"horizon": h, "vwap": true_vwap, "volume": true_volume, "participation": true_part, "feasible": true_part <= participation_limit})
-        for side in ["buy", "sell"]:
-            pred_pick = _recommend(pred_candidates, side)
-            true_pick = _recommend(true_candidates, side)
-            chosen_true = None if pred_pick is None else next((c for c in true_candidates if c["horizon"] == pred_pick["horizon"]), None)
-            regret = np.nan
-            if chosen_true is not None and true_pick is not None:
-                regret = chosen_true["vwap"] - true_pick["vwap"] if side == "buy" else true_pick["vwap"] - chosen_true["vwap"]
-            backtest_rows.append(
-                {
-                    **meta,
-                    "stock_code": sample["stock_code"],
-                    "datetime": sample["datetime"],
-                    "side": side,
-                    "has_pred_feasible": pred_pick is not None,
-                    "has_true_feasible": true_pick is not None,
-                    "recommended_horizon": None if pred_pick is None else pred_pick["horizon"],
-                    "true_best_horizon": None if true_pick is None else true_pick["horizon"],
-                    "predicted_vwap": np.nan if pred_pick is None else pred_pick["vwap"],
-                    "predicted_volume": np.nan if pred_pick is None else pred_pick["volume"],
-                    "predicted_participation": np.nan if pred_pick is None else pred_pick["participation"],
-                    "recommended_actual_vwap": np.nan if chosen_true is None else chosen_true["vwap"],
-                    "recommended_actual_volume": np.nan if chosen_true is None else chosen_true["volume"],
-                    "recommended_actual_participation": np.nan if chosen_true is None else chosen_true["participation"],
-                    "recommended_actual_feasible": False if chosen_true is None else chosen_true["feasible"],
-                    "horizon_match": False if pred_pick is None or true_pick is None else pred_pick["horizon"] == true_pick["horizon"],
-                    "regret": regret,
-                    "absolute_regret": abs(regret) if np.isfinite(regret) else np.nan,
-                }
-            )
+    pred_vwap_mat = np.column_stack([pred_df[f"predicted_vwap_{h}"].to_numpy(dtype=float) for h in horizons])
+    pred_volume_mat = np.column_stack([pred_df[f"predicted_volume_{h}"].to_numpy(dtype=float) for h in horizons])
+    true_vwap_mat = np.column_stack([pred_df[f"future_vwap_{h}"].to_numpy(dtype=float) for h in horizons])
+    true_volume_mat = np.column_stack([pred_df[f"future_volume_{h}"].to_numpy(dtype=float) for h in horizons])
+    pred_part_mat = np.divide(order_qty, pred_volume_mat, out=np.full_like(pred_volume_mat, np.inf), where=pred_volume_mat > 0)
+    true_part_mat = np.divide(order_qty, true_volume_mat, out=np.full_like(true_volume_mat, np.inf), where=true_volume_mat > 0)
+    pred_feasible = (pred_part_mat <= participation_limit) & np.isfinite(pred_vwap_mat)
+    true_feasible = (true_part_mat <= participation_limit) & np.isfinite(true_vwap_mat)
+    horizon_arr = np.asarray(horizons)
+    base_cols = pred_df[["stock_code", "datetime"]].reset_index(drop=True)
+    backtest_frames: list[pd.DataFrame] = []
+    for side in ["buy", "sell"]:
+        if side == "buy":
+            pred_score = np.where(pred_feasible, pred_vwap_mat, np.inf)
+            true_score = np.where(true_feasible, true_vwap_mat, np.inf)
+            pred_idx = np.argmin(pred_score, axis=1)
+            true_idx = np.argmin(true_score, axis=1)
+            has_pred = np.isfinite(pred_score[np.arange(len(pred_df)), pred_idx])
+            has_true = np.isfinite(true_score[np.arange(len(pred_df)), true_idx])
+        else:
+            pred_score = np.where(pred_feasible, pred_vwap_mat, -np.inf)
+            true_score = np.where(true_feasible, true_vwap_mat, -np.inf)
+            pred_idx = np.argmax(pred_score, axis=1)
+            true_idx = np.argmax(true_score, axis=1)
+            has_pred = np.isfinite(pred_score[np.arange(len(pred_df)), pred_idx])
+            has_true = np.isfinite(true_score[np.arange(len(pred_df)), true_idx])
+        row_idx = np.arange(len(pred_df))
+        chosen_true_vwap = true_vwap_mat[row_idx, pred_idx]
+        chosen_true_volume = true_volume_mat[row_idx, pred_idx]
+        chosen_true_part = true_part_mat[row_idx, pred_idx]
+        true_best_vwap = true_vwap_mat[row_idx, true_idx]
+        chosen_true_feasible = true_feasible[row_idx, pred_idx]
+        regret = np.full(len(pred_df), np.nan)
+        valid_regret = has_pred & has_true & np.isfinite(chosen_true_vwap) & np.isfinite(true_best_vwap)
+        if side == "buy":
+            regret[valid_regret] = chosen_true_vwap[valid_regret] - true_best_vwap[valid_regret]
+        else:
+            regret[valid_regret] = true_best_vwap[valid_regret] - chosen_true_vwap[valid_regret]
+        frame = base_cols.copy()
+        frame = frame.assign(
+            **meta,
+            side=side,
+            has_pred_feasible=has_pred,
+            has_true_feasible=has_true,
+            recommended_horizon=np.where(has_pred, horizon_arr[pred_idx], np.nan),
+            true_best_horizon=np.where(has_true, horizon_arr[true_idx], np.nan),
+            predicted_vwap=np.where(has_pred, pred_vwap_mat[row_idx, pred_idx], np.nan),
+            predicted_volume=np.where(has_pred, pred_volume_mat[row_idx, pred_idx], np.nan),
+            predicted_participation=np.where(has_pred, pred_part_mat[row_idx, pred_idx], np.nan),
+            recommended_actual_vwap=np.where(has_pred & np.isfinite(chosen_true_vwap), chosen_true_vwap, np.nan),
+            recommended_actual_volume=np.where(has_pred & np.isfinite(chosen_true_volume), chosen_true_volume, np.nan),
+            recommended_actual_participation=np.where(has_pred & np.isfinite(chosen_true_part), chosen_true_part, np.nan),
+            recommended_actual_feasible=has_pred & chosen_true_feasible,
+            horizon_match=has_pred & has_true & (pred_idx == true_idx),
+            regret=regret,
+            absolute_regret=np.abs(regret),
+        )
+        backtest_frames.append(frame)
     detail_df = pd.concat(detail_parts, ignore_index=True) if detail_parts else pd.DataFrame()
-    return metrics, detail_df, pd.DataFrame(backtest_rows)
+    backtest_df = pd.concat(backtest_frames, ignore_index=True) if backtest_frames else pd.DataFrame()
+    return metrics, detail_df, backtest_df
 
 
 def _write_reports(output_root: Path, metrics_rows: list[dict[str, Any]], details: list[pd.DataFrame], backtests: list[pd.DataFrame]) -> None:
@@ -508,6 +524,11 @@ def _write_prediction_part(
 
 
 def predict_rolling_group_task(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
     config = payload["config"]
     task = payload["task"]
     group_name = str(payload["group_name"])
@@ -554,6 +575,73 @@ def predict_rolling_group_task(payload: dict[str, Any]) -> dict[str, Any]:
     return {**task, "group": group_name, "status": "predicted", "paths": paths}
 
 
+def predict_rolling_day_task(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+    config = payload["config"]
+    task = payload["task"]
+    dataset_path = Path(payload["dataset_path"])
+    all_columns = payload["all_columns"]
+    batch_size = int(config.get("rolling_batch_size", 300_000))
+    output_root = resolve_path(config.get("rolling_output_dir", "data/outputs/rolling"))
+    group_model_root = _task_model_root(config, task)
+    liquidity_path = group_model_root / "stock_liquidity_group.parquet"
+    if not liquidity_path.exists():
+        return [{**task, "group": group_name, "status": "missing_liquidity"} for group_name in GROUPS]
+    print(f"[rolling-predict] load day split={task['split']} test_date={task['test_date']} window={task['window']}", flush=True)
+    liquidity = pd.read_parquet(liquidity_path)
+    test_window_df = _load_filtered_rows(dataset_path, {str(task["test_date"])}, None, all_columns, batch_size)
+    if test_window_df.empty:
+        return [{**task, "group": group_name, "status": "empty_test"} for group_name in GROUPS]
+    test_window_df = _apply_window_liquidity(test_window_df, liquidity)
+    print(
+        f"[rolling-predict] loaded day test_date={task['test_date']} rows={len(test_window_df):,}",
+        flush=True,
+    )
+    results: list[dict[str, Any]] = []
+    for group_name in GROUPS:
+        group_path = group_model_root / group_name
+        if not _model_artifacts_complete(group_path):
+            results.append({**task, "group": group_name, "status": "missing_model"})
+            continue
+        test_df = test_window_df[test_window_df["liquidity_group"].astype(str).eq(group_name)].copy()
+        if test_df.empty:
+            results.append({**task, "group": group_name, "status": "empty_group"})
+            continue
+        print(
+            f"[rolling-predict] start split={task['split']} test_date={task['test_date']} "
+            f"window={task['window']} group={group_name} rows={len(test_df):,}",
+            flush=True,
+        )
+        pred_df, horizons = _predict_frame(test_df, group_path, config)
+        del test_df
+        if pred_df.empty:
+            results.append({**task, "group": group_name, "status": "empty_prediction"})
+            continue
+        meta = {
+            "model_type": "ive_rolling",
+            "split": task["split"],
+            "window": int(task["window"]),
+            "test_date": task["test_date"],
+            "liquidity_group": group_name,
+            "train_start_date": task["train_dates"][0],
+            "train_end_date": task["train_dates"][-1],
+            "train_day_count": len(task["train_dates"]),
+        }
+        group_metrics, group_detail, group_backtest = _evaluate_predictions(pred_df, horizons, config, meta)
+        paths = _write_prediction_part(output_root, task, group_name, group_metrics, group_detail, group_backtest)
+        print(f"[rolling-predict] done split={task['split']} test_date={task['test_date']} window={task['window']} group={group_name}", flush=True)
+        results.append({**task, "group": group_name, "status": "predicted", "paths": paths})
+        del pred_df, group_detail, group_backtest
+        gc.collect()
+    del test_window_df
+    gc.collect()
+    return results
+
+
 def _prediction_payloads(
     config: dict[str, Any],
     tasks: list[dict[str, Any]],
@@ -564,12 +652,10 @@ def _prediction_payloads(
         {
             "config": config,
             "task": task,
-            "group_name": group_name,
             "dataset_path": str(dataset_path),
             "all_columns": all_columns,
         }
         for task in tasks
-        for group_name in GROUPS
     ]
 
 
@@ -616,13 +702,14 @@ def run_rolling_predictions(
     payloads = _prediction_payloads(config, tasks, Path(dataset_path), all_columns)
     if not payloads:
         return []
-    print(f"[rolling-predict] tasks={len(payloads)} workers={workers}", flush=True)
+    print(f"[rolling-predict] day_tasks={len(payloads)} workers={workers}", flush=True)
     if workers == 1:
-        results = [predict_rolling_group_task(payload) for payload in payloads]
+        nested_results = [predict_rolling_day_task(payload) for payload in payloads]
     else:
         ctx = mp.get_context("spawn")
         with ctx.Pool(processes=workers, maxtasksperchild=1) as pool:
-            results = list(pool.imap_unordered(predict_rolling_group_task, payloads))
+            nested_results = list(pool.imap_unordered(predict_rolling_day_task, payloads))
+    results = [result for day_results in nested_results for result in day_results]
     metrics_rows, detail_dfs, backtest_dfs = _collect_part_reports(results)
     _write_reports(output_root, metrics_rows, detail_dfs, backtest_dfs)
     return results

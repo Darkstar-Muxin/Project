@@ -191,6 +191,8 @@ python scripts/06_rolling_backtest.py --config config.yaml --months 202604 --win
 
 `--predict-only` 会直接读取已有模型和已有 `stock_liquidity_group.parquet`，不会重算或覆盖窗口流动性分类。
 
+预测评估已按“日期”为任务读取数据：每个 worker 对同一天只读取一次 feature part，再顺序处理 `high / medium / low`，避免同一天被三个流动性组重复读取。推荐回测也使用向量化计算，避免逐行 Python 循环。若机器仍然卡顿，先从 `--predict-workers 2` 或 `--predict-workers 4` 开始。
+
 CPU 多进程预测评估：
 
 ```bash

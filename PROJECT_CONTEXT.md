@@ -245,6 +245,14 @@ python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202
 python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --predict-only --predict-workers 4
 ```
 
+预测评估性能优化状态：
+
+- 预测任务按 `date + window` 拆分，不再按 `date + window + liquidity_group` 拆分。
+- 每个 worker 对同一天只读取一次 feature part，然后顺序处理 `high / medium / low`。
+- `IVEDataset` 使用数组保存每行所属交易日序列起点，替代逐行 Python dict。
+- 推荐回测使用 numpy 向量化计算推荐 horizon、真实最优 horizon 和 regret。
+- 如果预测仍然卡顿，优先降低 `--predict-workers` 到 2 或 4，避免多个进程同时持有过大的日级 DataFrame。
+
 多 GPU 训练入口：
 
 ```bash

@@ -104,17 +104,17 @@ class IVEDataset(Dataset):
         self.vwap_targets = np.vstack(self.vwap_targets).T.astype(np.float32)
         valid_mask = _valid_target_mask(self.df, horizons).to_numpy()
         self.indices = np.flatnonzero(valid_mask)
-        self.group_bounds: dict[int, tuple[int, int]] = {}
+        self.start_bounds = np.zeros(len(self.df), dtype=np.int64)
         for _, group in self.df.groupby(["stock_code", "date"], sort=False):
             idx = group.index.to_numpy()
-            self.group_bounds.update({int(i): (int(idx[0]), int(idx[-1]) + 1) for i in idx})
+            self.start_bounds[idx] = int(idx[0])
 
     def __len__(self) -> int:
         return len(self.indices)
 
     def __getitem__(self, item: int) -> dict[str, torch.Tensor]:
         row_idx = int(self.indices[item])
-        start_bound, _ = self.group_bounds[row_idx]
+        start_bound = int(self.start_bounds[row_idx])
         start = max(start_bound, row_idx - self.context_length + 1)
         seq = self.features[start : row_idx + 1]
         valid_len = seq.shape[0]

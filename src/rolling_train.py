@@ -183,9 +183,11 @@ def _classify_window_liquidity(train_df: pd.DataFrame, config: dict[str, Any]) -
     return summary.sort_values("avg_daily_amount", ascending=False).reset_index(drop=True)
 
 
-def _apply_window_liquidity(df: pd.DataFrame, liquidity: pd.DataFrame) -> pd.DataFrame:
+def _apply_window_liquidity(df: pd.DataFrame, liquidity: pd.DataFrame, fill_missing_group: str | None = "low") -> pd.DataFrame:
     out = _drop_leaky_columns(df).merge(liquidity[["stock_code", "liquidity_group"]], on="stock_code", how="left")
-    out["liquidity_group"] = out["liquidity_group"].fillna("low")
+    if fill_missing_group is None:
+        return out
+    out["liquidity_group"] = out["liquidity_group"].fillna(fill_missing_group)
     return out
 
 
@@ -588,7 +590,12 @@ def predict_rolling_group_task(payload: dict[str, Any]) -> dict[str, Any]:
     test_window_df = _load_filtered_rows(dataset_path, {str(task["test_date"])}, None, all_columns, batch_size)
     if test_window_df.empty:
         return {**task, "group": group_name, "status": "empty_test"}
-    test_window_df = _apply_window_liquidity(test_window_df, liquidity)
+    test_window_df = _apply_window_liquidity(test_window_df, liquidity, fill_missing_group=None)
+    missing_mask = test_window_df["liquidity_group"].isna()
+    if missing_mask.any():
+        test_window_df = test_window_df.loc[~missing_mask].copy()
+    if test_window_df.empty:
+        return {**task, "group": group_name, "status": "empty_classified_test"}
     test_df = test_window_df[test_window_df["liquidity_group"].astype(str).eq(group_name)].copy()
     del test_window_df
     if test_df.empty:
@@ -636,7 +643,19 @@ def predict_rolling_day_task(payload: dict[str, Any]) -> list[dict[str, Any]]:
     test_window_df = _load_filtered_rows(dataset_path, {str(task["test_date"])}, None, all_columns, batch_size)
     if test_window_df.empty:
         return [{**task, "group": group_name, "status": "empty_test"} for group_name in GROUPS]
-    test_window_df = _apply_window_liquidity(test_window_df, liquidity)
+    test_window_df = _apply_window_liquidity(test_window_df, liquidity, fill_missing_group=None)
+    missing_mask = test_window_df["liquidity_group"].isna()
+    missing_rows = int(missing_mask.sum())
+    if missing_rows:
+        missing_stocks = int(test_window_df.loc[missing_mask, "stock_code"].nunique())
+        print(
+            f"[rolling-predict] skip unclassified test_date={task['test_date']} "
+            f"rows={missing_rows:,} stocks={missing_stocks:,}",
+            flush=True,
+        )
+        test_window_df = test_window_df.loc[~missing_mask].copy()
+    if test_window_df.empty:
+        return [{**task, "group": group_name, "status": "empty_classified_test"} for group_name in GROUPS]
     print(
         f"[rolling-predict] loaded day test_date={task['test_date']} rows={len(test_window_df):,}",
         flush=True,

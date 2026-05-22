@@ -195,6 +195,8 @@ python scripts/06_rolling_backtest.py --config config.yaml --months 202604 --win
 
 预测阶段还会输出 dataset 构造和 forward 进度日志。`ive_predict_batch_size` 控制预测 batch 大小，`predict_log_every_batches` 控制每隔多少个 batch 打印一次进度；显存不参与 CPU 预测，内存足够时可以尝试把 `ive_predict_batch_size` 调到 512。
 
+预测日中没有出现在 rolling 训练窗口流动性分类表里的股票会被跳过，并打印 `skip unclassified` 行数和股票数。这样避免早期窗口不满时把大量未分类股票强行塞进 `low` 组，造成预测异常变慢和分组含义失真。
+
 CPU 多进程预测评估：
 
 ```bash

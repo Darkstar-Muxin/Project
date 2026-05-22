@@ -253,6 +253,7 @@ python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202
 - `_predict_frame` 不再使用 PyTorch DataLoader 逐样本调用 `__getitem__`，而是手写 batch 构造上下文张量，减少 Python/collate 开销。
 - 推荐回测使用 numpy 向量化计算推荐 horizon、真实最优 horizon 和 regret。
 - `ive_predict_batch_size` 控制预测 batch，`predict_log_every_batches` 控制 forward 进度日志。
+- 预测日里没有出现在 rolling 窗口流动性分类表中的股票会被跳过，并打印 `skip unclassified`。不要再把未分类股票默认填成 `low`，否则早期窗口不满时会把大量窗口外股票塞进 low 组，导致预测极慢且分组含义不对。
 - 如果预测仍然卡顿，优先降低 `--predict-workers` 到 2 或 4，避免多个进程同时持有过大的日级 DataFrame。
 
 多 GPU 训练入口：

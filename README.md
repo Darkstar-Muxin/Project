@@ -193,6 +193,8 @@ python scripts/06_rolling_backtest.py --config config.yaml --months 202604 --win
 
 预测评估已按“日期”为任务读取数据：每个 worker 对同一天只读取一次 feature part，再顺序处理 `high / medium / low`，避免同一天被三个流动性组重复读取。推荐回测也使用向量化计算，避免逐行 Python 循环。若机器仍然卡顿，先从 `--predict-workers 2` 或 `--predict-workers 4` 开始。
 
+预测阶段还会输出 dataset 构造和 forward 进度日志。`ive_predict_batch_size` 控制预测 batch 大小，`predict_log_every_batches` 控制每隔多少个 batch 打印一次进度；显存不参与 CPU 预测，内存足够时可以尝试把 `ive_predict_batch_size` 调到 512。
+
 CPU 多进程预测评估：
 
 ```bash

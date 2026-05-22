@@ -250,7 +250,9 @@ python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202
 - 预测任务按 `date + window` 拆分，不再按 `date + window + liquidity_group` 拆分。
 - 每个 worker 对同一天只读取一次 feature part，然后顺序处理 `high / medium / low`。
 - `IVEDataset` 使用数组保存每行所属交易日序列起点，替代逐行 Python dict。
+- `_predict_frame` 不再使用 PyTorch DataLoader 逐样本调用 `__getitem__`，而是手写 batch 构造上下文张量，减少 Python/collate 开销。
 - 推荐回测使用 numpy 向量化计算推荐 horizon、真实最优 horizon 和 regret。
+- `ive_predict_batch_size` 控制预测 batch，`predict_log_every_batches` 控制 forward 进度日志。
 - 如果预测仍然卡顿，优先降低 `--predict-workers` 到 2 或 4，避免多个进程同时持有过大的日级 DataFrame。
 
 多 GPU 训练入口：

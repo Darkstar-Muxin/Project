@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import json
 import multiprocessing as mp
+import time
 import shutil
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,6 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 try:
     import torch
-    from torch.utils.data import DataLoader
 except ModuleNotFoundError as exc:  # pragma: no cover
     raise ModuleNotFoundError("PyTorch is required for rolling training. Install with: pip install torch") from exc
 
@@ -211,9 +211,33 @@ def _load_model(group_path: Path) -> tuple[IVEModel, dict[str, Any]]:
     return model, meta
 
 
+def _context_batch(dataset: IVEDataset, item_positions: np.ndarray) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    row_indices = dataset.indices[item_positions].astype(np.int64, copy=False)
+    batch_size = len(row_indices)
+    context_length = int(dataset.context_length)
+    feature_count = len(dataset.feature_columns)
+    x = np.zeros((batch_size, context_length, feature_count), dtype=np.float32)
+    padding_mask = np.ones((batch_size, context_length), dtype=bool)
+    for out_idx, row_idx in enumerate(row_indices):
+        start_bound = int(dataset.start_bounds[int(row_idx)])
+        start = max(start_bound, int(row_idx) - context_length + 1)
+        seq = dataset.features[start : int(row_idx) + 1]
+        valid_len = seq.shape[0]
+        x[out_idx, -valid_len:] = seq
+        padding_mask[out_idx, -valid_len:] = False
+    return (
+        torch.from_numpy(x),
+        torch.from_numpy(padding_mask),
+        torch.from_numpy(dataset.stock_ids[row_indices]),
+        torch.from_numpy(dataset.group_ids[row_indices]),
+    )
+
+
 def _predict_frame(test_df: pd.DataFrame, group_path: Path, config: dict[str, Any]) -> tuple[pd.DataFrame, list[int]]:
+    started = time.perf_counter()
     model, meta = _load_model(group_path)
     normalizer = Normalizer(mean=meta["normalizer"]["mean"], std=meta["normalizer"]["std"])
+    print(f"[rolling-predict] build dataset group={group_path.name} rows={len(test_df):,}", flush=True)
     dataset = IVEDataset(
         test_df,
         list(meta["feature_columns"]),
@@ -223,19 +247,35 @@ def _predict_frame(test_df: pd.DataFrame, group_path: Path, config: dict[str, An
         normalizer,
         context_length=int(meta.get("context_length", 390)),
     )
-    loader = DataLoader(dataset, batch_size=int(config.get("ive_batch_size", 256)), shuffle=False, num_workers=0)
     rows = dataset.df.iloc[dataset.indices].reset_index(drop=True).copy()
     if rows.empty:
         return rows, [int(h) for h in meta["horizons"]]
+    print(
+        f"[rolling-predict] dataset ready group={group_path.name} valid_rows={len(rows):,} "
+        f"seconds={time.perf_counter() - started:.1f}",
+        flush=True,
+    )
     volume_mu_parts: list[np.ndarray] = []
     volume_sigma_parts: list[np.ndarray] = []
     vwap_return_parts: list[np.ndarray] = []
+    batch_size = int(config.get("ive_predict_batch_size", config.get("ive_batch_size", 256)))
+    log_every = max(int(config.get("predict_log_every_batches", 25)), 1)
+    positions = np.arange(len(dataset), dtype=np.int64)
     with torch.no_grad():
-        for batch in loader:
-            out = model(batch["x"], batch["stock_id"], batch["group_id"], batch["padding_mask"])
+        for batch_no, start in enumerate(range(0, len(positions), batch_size), start=1):
+            item_positions = positions[start : start + batch_size]
+            x, padding_mask, stock_id, group_id = _context_batch(dataset, item_positions)
+            out = model(x, stock_id, group_id, padding_mask)
             volume_mu_parts.append(out["volume_mu"].cpu().numpy())
             volume_sigma_parts.append(np.log1p(np.exp(out["volume_log_sigma"].cpu().numpy())))
             vwap_return_parts.append(out["vwap_return"].cpu().numpy())
+            if batch_no == 1 or batch_no % log_every == 0:
+                done = min(start + batch_size, len(positions))
+                print(
+                    f"[rolling-predict] forward group={group_path.name} rows={done:,}/{len(positions):,} "
+                    f"seconds={time.perf_counter() - started:.1f}",
+                    flush=True,
+                )
     volume_mu = np.vstack(volume_mu_parts)
     volume_sigma = np.vstack(volume_sigma_parts)
     vwap_return = np.vstack(vwap_return_parts)

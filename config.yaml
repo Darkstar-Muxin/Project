@@ -77,6 +77,8 @@ ive_num_layers: 2
 ive_dropout: 0.1
 ive_epochs: 5
 ive_batch_size: 256
+ive_predict_batch_size: 256
+predict_log_every_batches: 25
 ive_learning_rate: 0.0003
 ive_weight_decay: 0.0001
 ive_max_train_rows:

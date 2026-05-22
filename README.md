@@ -183,6 +183,14 @@ python scripts/06_rolling_backtest.py --config config.yaml --overwrite-models
 python scripts/06_rolling_backtest.py --config config.yaml --months 202604 --windows 5 --train-only
 ```
 
+只做预测评估、不进入训练阶段：
+
+```bash
+python scripts/06_rolling_backtest.py --config config.yaml --months 202604 --windows 5 --predict-only --predict-workers 4
+```
+
+`--predict-only` 会直接读取已有模型和已有 `stock_liquidity_group.parquet`，不会重算或覆盖窗口流动性分类。
+
 CPU 多进程预测评估：
 
 ```bash
@@ -211,6 +219,12 @@ CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --train-workers 2 --train-only
+```
+
+已有模型后只跑 CPU 预测评估：
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --predict-only --predict-workers 4
 ```
 
 并行训练版按 `date + window` 分发任务到可见 GPU。每个任务内部仍按 `high / medium / low` 顺序训练，避免同一日期内部抢显存。也可以显式指定卡：

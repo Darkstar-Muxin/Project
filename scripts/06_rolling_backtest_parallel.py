@@ -55,7 +55,10 @@ def main() -> None:
     parser.add_argument("--windows", type=int, nargs="+", default=None, help="rolling windows to run, e.g. --windows 5 or --windows 5 8")
     parser.add_argument("--months", nargs="+", default=None, help="target months to run, e.g. --months 202604")
     parser.add_argument("--train-only", action="store_true", help="train rolling models and skip prediction/evaluation")
+    parser.add_argument("--predict-only", action="store_true", help="skip training and run prediction/evaluation from existing models")
     args = parser.parse_args()
+    if args.train_only and args.predict_only:
+        parser.error("--train-only and --predict-only cannot be used together")
 
     config = load_config(args.config)
     from src.rolling_train import _schema_columns, build_rolling_tasks, run_rolling_predictions
@@ -65,6 +68,11 @@ def main() -> None:
     train_workers = int(args.train_workers or config.get("rolling_train_workers", 1))
     train_workers = max(train_workers, 1)
     devices = _visible_devices(train_workers, args.devices)
+    if args.predict_only:
+        print(f"[parallel-train] predict-only; skip training tasks={len(tasks)}", flush=True)
+        run_rolling_predictions(config, tasks, dataset_path, all_columns, predict_workers=args.predict_workers)
+        print("parallel rolling prediction completed")
+        return
     payloads = [
         {
             "config": dict(config),

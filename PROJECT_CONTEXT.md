@@ -239,6 +239,12 @@ python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202
 python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --train-workers 2 --train-only
 ```
 
+只做预测评估时使用 `--predict-only`。该模式直接读取已有模型和已有 `stock_liquidity_group.parquet`，不会读取训练窗口、不重算流动性分类，也不会覆盖分类文件。
+
+```bash
+python scripts/06_rolling_backtest_parallel.py --config config.yaml --months 202604 --windows 5 --predict-only --predict-workers 4
+```
+
 多 GPU 训练入口：
 
 ```bash

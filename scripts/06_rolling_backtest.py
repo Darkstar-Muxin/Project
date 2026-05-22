@@ -19,7 +19,10 @@ def main() -> None:
     parser.add_argument("--windows", type=int, nargs="+", default=None, help="rolling windows to run, e.g. --windows 5 or --windows 5 8")
     parser.add_argument("--months", nargs="+", default=None, help="target months to run, e.g. --months 202604")
     parser.add_argument("--train-only", action="store_true", help="train rolling models and skip prediction/evaluation")
+    parser.add_argument("--predict-only", action="store_true", help="skip training and run prediction/evaluation from existing models")
     args = parser.parse_args()
+    if args.train_only and args.predict_only:
+        parser.error("--train-only and --predict-only cannot be used together")
 
     config = load_config(args.config)
     run_rolling_backtest(
@@ -29,6 +32,7 @@ def main() -> None:
         windows=args.windows,
         months=args.months,
         train_only=args.train_only,
+        predict_only=args.predict_only,
     )
     print("rolling backtest completed")
 

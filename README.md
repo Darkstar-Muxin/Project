@@ -317,3 +317,13 @@ streamlit run app/streamlit_app.py
 ## 维护约定
 
 后续每次修改核心流程、数据口径、特征、模型、评估或网页展示时，都要同步更新本 README 和 `PROJECT_CONTEXT.md`。
+## 2026-05-23 update: rolling-only web prediction
+
+- `app/streamlit_app.py` and `src/predict.py` now use rolling IVE models only.
+- Single-order prediction requires `rolling_window` and loads models from `data/models/rolling/window_{N}d/{test_date}/{liquidity_group}/`.
+- Static model fallback under `data/models/high`, `data/models/medium`, and `data/models/low` is disabled for web prediction.
+- Missing rolling model artifacts now raise an explicit rolling-model error instead of trying to load static-model paths.
+- The web app discovers available rolling windows and dates from `data/models/rolling` and defaults to an existing rolling date.
+- Rolling report CSVs are read from `data/outputs/rolling/*.csv`; the app temporarily also checks `data/outputs/rolling/rolling/*.csv` for existing older outputs.
+- The single-order page also shows same-day rolling metrics plus selectable per-stock VWAP and volume prediction curves from rolling `detail.parquet`.
+- Same-day rolling metrics and per-stock VWAP/volume curves now live on the Evaluation Reports tab; curve reads are filtered by stock and horizon to keep horizon switching responsive.

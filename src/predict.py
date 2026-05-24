@@ -16,6 +16,15 @@ from src.ive_dataset import Normalizer, transform_features
 from src.ive_model import IVEModel
 from src.utils import normalize_side, resolve_path
 
+MODEL_ARTIFACTS = [
+    "ive_model.pt",
+    "model_meta.json",
+    "feature_columns.joblib",
+    "stock_vocab.joblib",
+    "group_vocab.joblib",
+    "normalizer.joblib",
+]
+
 
 def _load_dataset(path: Path, start_time: str | None = None, config: dict[str, Any] | None = None) -> pd.DataFrame:
     if path.exists():
@@ -46,25 +55,58 @@ def _find_feature_row(df: pd.DataFrame, stock_code: str, start_time: str) -> tup
     return row, same_day
 
 
-def _model_group_path(config: dict[str, Any], liquidity_group: str, matched_date: str, rolling_window: int | None) -> Path:
-    if rolling_window is not None:
-        rolling_root = resolve_path(config.get("rolling_model_dir", "data/models/rolling"))
-        path = rolling_root / f"window_{int(rolling_window)}d" / matched_date / liquidity_group
-        if path.exists():
-            return path
-    model_path = resolve_path(config["model_dir"]) / liquidity_group
-    if model_path.exists():
-        return model_path
+def _available_rolling_dates(config: dict[str, Any], rolling_window: int | None = None) -> list[str]:
     rolling_root = resolve_path(config.get("rolling_model_dir", "data/models/rolling"))
-    candidates = sorted(rolling_root.glob(f"window_*d/{matched_date}/{liquidity_group}"))
-    if candidates:
-        return candidates[-1]
-    raise FileNotFoundError(f"No model found for group={liquidity_group}, date={matched_date}")
-
-
-def _rolling_liquidity_group(config: dict[str, Any], stock_code: str, matched_date: str, rolling_window: int | None) -> str | None:
+    if not rolling_root.exists():
+        return []
+    window_dirs: list[Path]
     if rolling_window is None:
-        return None
+        window_dirs = sorted(rolling_root.glob("window_*d"))
+    else:
+        window_dirs = [rolling_root / f"window_{int(rolling_window)}d"]
+    dates: set[str] = set()
+    for window_dir in window_dirs:
+        if not window_dir.exists():
+            continue
+        dates.update(path.name for path in window_dir.iterdir() if path.is_dir())
+    return sorted(dates)
+
+
+def _format_available_dates(config: dict[str, Any], rolling_window: int | None = None, limit: int = 12) -> str:
+    dates = _available_rolling_dates(config, rolling_window)
+    if not dates:
+        return "none"
+    shown = dates[-limit:]
+    prefix = "..." if len(dates) > limit else ""
+    return ", ".join([prefix, *shown]).lstrip(", ")
+
+
+def _missing_artifacts(group_path: Path) -> list[str]:
+    return [name for name in MODEL_ARTIFACTS if not (group_path / name).exists()]
+
+
+def _model_group_path(config: dict[str, Any], liquidity_group: str, matched_date: str, rolling_window: int | None) -> Path:
+    if rolling_window is None:
+        raise ValueError("rolling_window is required. Static model fallback is disabled; use a rolling model.")
+    rolling_root = resolve_path(config.get("rolling_model_dir", "data/models/rolling"))
+    path = rolling_root / f"window_{int(rolling_window)}d" / matched_date / liquidity_group
+    if not path.exists():
+        available = _format_available_dates(config, rolling_window)
+        raise FileNotFoundError(
+            f"Rolling model directory not found: {path}. "
+            f"Run rolling training for date={matched_date}, window={rolling_window}. "
+            f"Available dates for this window: {available}."
+        )
+    missing = _missing_artifacts(path)
+    if missing:
+        raise FileNotFoundError(
+            f"Rolling model artifacts are incomplete in {path}; missing: {', '.join(missing)}. "
+            f"Run rolling training for date={matched_date}, window={rolling_window}."
+        )
+    return path
+
+
+def _rolling_liquidity_group(config: dict[str, Any], stock_code: str, matched_date: str, rolling_window: int) -> str:
     path = (
         resolve_path(config.get("rolling_model_dir", "data/models/rolling"))
         / f"window_{int(rolling_window)}d"
@@ -72,11 +114,19 @@ def _rolling_liquidity_group(config: dict[str, Any], stock_code: str, matched_da
         / "stock_liquidity_group.parquet"
     )
     if not path.exists():
-        return None
+        available = _format_available_dates(config, rolling_window)
+        raise FileNotFoundError(
+            f"Rolling liquidity classification not found: {path}. "
+            f"Run rolling training for date={matched_date}, window={rolling_window}. "
+            f"Available dates for this window: {available}."
+        )
     df = pd.read_parquet(path)
     hit = df[df["stock_code"].astype(str).eq(str(stock_code))]
     if hit.empty:
-        return "low"
+        raise ValueError(
+            f"stock_code={stock_code} is not in rolling liquidity classification for "
+            f"date={matched_date}, window={rolling_window}. The stock cannot be predicted for this rolling window."
+        )
     return str(hit.iloc[0]["liquidity_group"])
 
 
@@ -165,23 +215,21 @@ def predict_recommendation(
     order_qty_float = float(order_qty)
     if order_qty_float <= 0:
         raise ValueError("order_qty must be positive")
+    if rolling_window is None:
+        raise ValueError("rolling_window is required. Static model fallback is disabled; use a rolling model.")
+
+    requested_date = pd.to_datetime(start_time).date().isoformat()
+    rolling_group = _rolling_liquidity_group(config, stock_code, requested_date, rolling_window)
+    liquidity_group = rolling_group
+    group_path = _model_group_path(config, liquidity_group, requested_date, rolling_window)
 
     dataset_path = resolve_path(config["feature_data_dir"]) / "model_dataset.parquet"
     df = _load_dataset(dataset_path, start_time=start_time, config=config)
     row, context_df = _find_feature_row(df, stock_code, start_time)
-    matched_date = pd.to_datetime(row["datetime"]).date().isoformat()
-    rolling_group = _rolling_liquidity_group(config, stock_code, matched_date, rolling_window)
-    if rolling_group is not None:
-        liquidity_group = rolling_group
-        row = row.copy()
-        row["liquidity_group"] = liquidity_group
-        context_df = context_df.copy()
-        context_df["liquidity_group"] = liquidity_group
-    elif "liquidity_group" in row.index:
-        liquidity_group = str(row["liquidity_group"])
-    else:
-        raise ValueError("No rolling liquidity classification found. Run scripts/06_rolling_backtest.py for this date/window first.")
-    group_path = _model_group_path(config, liquidity_group, matched_date, rolling_window)
+    row = row.copy()
+    row["liquidity_group"] = liquidity_group
+    context_df = context_df.copy()
+    context_df["liquidity_group"] = liquidity_group
     model, meta = _load_model(group_path)
     model_input = _build_sequence(context_df, row, meta)
     with torch.no_grad():
